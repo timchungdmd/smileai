@@ -5,9 +5,13 @@ import RealityKit
 
 struct ScannerContainerView: View {
     @StateObject private var viewModel = ProcessingViewModel()
-    @EnvironmentObject var session: PatientSession // <--- CONNECTS TO DESIGN TAB
+    @EnvironmentObject var session: PatientSession
     @State private var isTargeted = false
     @State private var isExporting = false
+    
+    // ALERT STATE
+    @State private var showOverwriteAlert = false
+    @State private var pendingImportURL: URL?
     
     var body: some View {
         HStack(spacing: 0) {
@@ -76,7 +80,18 @@ struct ScannerContainerView: View {
                     guard let provider = providers.first else { return false }
                     provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (data, error) in
                         guard let data = data as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                        Task { @MainActor in viewModel.ingest(url: url) }
+                        
+                        DispatchQueue.main.async {
+                            // CHECK IF MODEL EXISTS
+                            if viewModel.state.hasModel || session.activeScanURL != nil {
+                                // Stash the URL and ask for permission
+                                self.pendingImportURL = url
+                                self.showOverwriteAlert = true
+                            } else {
+                                // No model exists, proceed immediately
+                                Task { @MainActor in viewModel.ingest(url: url) }
+                            }
+                        }
                     }
                     return true
                 }
@@ -101,12 +116,61 @@ struct ScannerContainerView: View {
                 }
             }
         }
-        // --- CRITICAL SYNC LOGIC ---
+        // SYNC LOGIC
         .onChange(of: viewModel.state) { newState in
             if case .completed(let url) = newState {
                 print("✅ Syncing Model to Design Tab: \(url.path)")
                 session.activeScanURL = url
             }
         }
+        // EXPORTER
+        .fileExporter(isPresented: $isExporting, document: STLFile(sourceURL: viewModel.currentModelURL), contentType: UTType(filenameExtension: "stl")!, defaultFilename: "DentalScan") { result in
+            if case .success(let url) = result { viewModel.exportSTL(to: url) }
+        }
+        // DELETION ALERT
+        .alert("Start New Reconstruction?", isPresented: $showOverwriteAlert) {
+            Button("Cancel", role: .cancel) {
+                pendingImportURL = nil
+            }
+            Button("Delete & Start", role: .destructive) {
+                viewModel.resetAndCleanup()
+                session.activeScanURL = nil
+                
+                if let url = pendingImportURL {
+                    viewModel.ingest(url: url)
+                }
+                pendingImportURL = nil
+            }
+        } message: {
+            Text("This will permanently delete the current model and any unsaved changes in the Smile Design tab.")
+        }
     }
 }
+
+// MARK: - Local Helpers
+
+struct SceneViewWrapper: NSViewRepresentable {
+    let modelURL: URL
+    
+    func makeNSView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.allowsCameraControl = true
+        view.autoenablesDefaultLighting = true
+        view.backgroundColor = NSColor.darkGray
+        return view
+    }
+    
+    func updateNSView(_ uiView: SCNView, context: Context) {
+        if uiView.scene?.rootNode.name != modelURL.path {
+            do {
+                let scene = try SCNScene(url: modelURL, options: nil)
+                scene.rootNode.name = modelURL.path
+                uiView.scene = scene
+            } catch {
+                print("Failed to load scene: \(error)")
+            }
+        }
+    }
+}
+
+// Note: STLFile struct removed from here as it is defined elsewhere.

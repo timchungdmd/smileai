@@ -7,68 +7,96 @@ import SceneKit.ModelIO
 @MainActor
 class ProcessingViewModel: ObservableObject {
     
-    enum State {
+    enum State: Equatable {
         case idle
         case processing(progress: Double, timeElapsed: TimeInterval)
         case completed(url: URL)
         case failed(error: String)
+        
+        var isProcessing: Bool {
+            if case .processing = self { return true }
+            return false
+        }
+        
+        // Helper to check if we have an active model
+        var hasModel: Bool {
+            if case .completed = self { return true }
+            return false
+        }
+        
+        static func == (lhs: State, rhs: State) -> Bool {
+            switch (lhs, rhs) {
+            case (.idle, .idle): return true
+            case (.processing, .processing): return true
+            case (.completed(let a), .completed(let b)): return a == b
+            case (.failed(let a), .failed(let b)): return a == b
+            default: return false
+            }
+        }
     }
     
     @Published var state: State = .idle
     @Published var consoleLog: String = "Ready. Drop HEIC/JPG Folder or Zip."
-    
-    // Configurable Detail Level
-    // .full = High detail + Texture Maps (Default)
-    // .raw  = Max Geometry + Vertex Colors (No texture maps)
     @Published var selectedDetailLevel: PhotogrammetrySession.Request.Detail = .full
     
-    // Store the last generated model URL
     var currentModelURL: URL?
-    
     private var startTime: Date?
+    
+    // MARK: - Cleanup Logic
+    
+    /// Deletes the current model file and resets state
+    func resetAndCleanup() {
+        if let url = currentModelURL {
+            do {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                    self.log("🗑️ Previous model deleted.")
+                }
+            } catch {
+                self.log("⚠️ Failed to delete old model: \(error.localizedDescription)")
+            }
+        }
+        
+        // Reset State
+        self.currentModelURL = nil
+        self.state = .idle
+        self.consoleLog = "Ready for new scan."
+    }
     
     // MARK: - Ingestion & Processing
     
     func ingest(url: URL) {
-        // 1. Security Scope: Essential for Sandboxed Mac Apps to read user folders
         let access = url.startAccessingSecurityScopedResource()
         
         Task {
-            // We defer stopping access until the task finishes,
-            // but for Photogrammetry, we might need to keep it open or copy files.
-            // Copying to Temp is safest for Sandboxed processing.
-            defer {
-                if access { url.stopAccessingSecurityScopedResource() }
-            }
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
             
             do {
-                self.log("📂 Analyzing Input: \(url.lastPathComponent)")
-                
                 var inputRoot = url
                 
-                // A. Handle Zip (Decompress to Temp)
+                // 1. Unzip if needed
                 if ["zip", "ar"].contains(url.pathExtension.lowercased()) {
                     self.log("📦 Decompressing Archive...")
                     inputRoot = try ZipUtilities.unzip(fileURL: url)
                 }
                 
-                // B. Validate Data
+                // 2. Find Images
                 guard let dataFolder = ZipUtilities.findImageSource(in: inputRoot) else {
-                    throw NSError(domain: "App", code: 404, userInfo: [NSLocalizedDescriptionKey: "No valid images found in folder."])
+                    throw NSError(domain: "App", code: 404, userInfo: [NSLocalizedDescriptionKey: "No valid images found."])
                 }
                 
-                // C. Count Images
+                // 3. Count
                 let validExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
                 let files = try? FileManager.default.contentsOfDirectory(at: dataFolder, includingPropertiesForKeys: nil)
                 let imageCount = files?.filter { validExtensions.contains($0.pathExtension.lowercased()) }.count ?? 0
                 
-                self.log("📸 Found \(imageCount) images. Mode: \(selectedDetailLevel == .raw ? "RAW (Max Density)" : "FULL (Textured)")")
+                self.log("📸 Found \(imageCount) images.")
                 
                 guard imageCount >= 10 else {
                     throw NSError(domain: "App", code: 400, userInfo: [NSLocalizedDescriptionKey: "Need at least 10 images."])
                 }
                 
-                // D. Run Engine
+                // 4. Run Photogrammetry
                 await runPhotogrammetry(inputFolder: dataFolder, imageCount: imageCount)
                 
             } catch {
@@ -80,12 +108,11 @@ class ProcessingViewModel: ObservableObject {
     
     private func runPhotogrammetry(inputFolder: URL, imageCount: Int) async {
         self.startTime = Date()
-        self.log("🚀 Starting Engine...")
+        self.log("🚀 Starting Reconstruction...")
         
-        // Output to Temp
         let tempDir = FileManager.default.temporaryDirectory
         let uniqueID = UUID().uuidString
-        let filename = "DentalScan_\(selectedDetailLevel == .raw ? "Raw" : "Full")_\(uniqueID).usdz"
+        let filename = "DentalScan_\(uniqueID).usdz"
         let outputURL = tempDir.appendingPathComponent(filename)
         
         do {
@@ -93,15 +120,14 @@ class ProcessingViewModel: ObservableObject {
                 throw NSError(domain: "App", code: 500, userInfo: [NSLocalizedDescriptionKey: "Hardware not supported."])
             }
             
-            // Configuration for MAX QUALITY
             var config = PhotogrammetrySession.Configuration()
-            config.featureSensitivity = .high // Critical for capturing fine details
+            config.featureSensitivity = .high
             config.sampleOrdering = .unordered
-            config.isObjectMaskingEnabled = false // Disable masking to ensure we get everything
+            
+            // Enable Apple's built-in masking
+            config.isObjectMaskingEnabled = true
             
             let session = try PhotogrammetrySession(input: inputFolder, configuration: config)
-            
-            // Use the selected detail level (Full or Raw)
             let request = PhotogrammetrySession.Request.modelFile(url: outputURL, detail: selectedDetailLevel)
             
             try session.process(requests: [request])
@@ -111,26 +137,23 @@ class ProcessingViewModel: ObservableObject {
                 case .requestProgress(_, let fraction):
                     await MainActor.run {
                         let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
-                        // Smooth progress bar (0.0 -> 1.0)
                         self.state = .processing(progress: fraction, timeElapsed: elapsed)
                         
-                        // Log every 10%
                         if Int(fraction * 100) % 10 == 0 {
-                            self.consoleLog = "Processing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
+                            self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
                         }
                     }
                     
                 case .requestComplete(_, _):
                     await MainActor.run {
                         let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
-                        self.log("✨ Success in \(Int(elapsed))s! Model Ready.")
+                        self.log("✨ Success in \(Int(elapsed))s!")
                         self.currentModelURL = outputURL
                         self.state = .completed(url: outputURL)
                     }
                     
                 case .requestError(_, let error):
-                    self.log("⚠️ Engine Warning: \(error.localizedDescription)")
-                    // We don't throw here immediately, as some warnings are non-fatal
+                    self.log("⚠️ Warning: \(error.localizedDescription)")
                     
                 default: break
                 }
@@ -138,23 +161,20 @@ class ProcessingViewModel: ObservableObject {
         } catch {
             await MainActor.run {
                 self.state = .failed(error: error.localizedDescription)
-                self.log("❌ Engine Failed: \(error.localizedDescription)")
+                self.log("❌ Failed: \(error.localizedDescription)")
             }
         }
     }
     
-    // MARK: - Export Logic (STL)
-    
     func exportSTL(to destinationURL: URL) {
         guard let sourceURL = currentModelURL else { return }
-        self.log("⚙️ Converting to STL (Scale: mm)...")
+        self.log("⚙️ Converting to STL...")
         
         Task.detached {
             do {
                 let asset = MDLAsset(url: sourceURL)
                 guard asset.count > 0 else { throw NSError(domain: "Ex", code: 0, userInfo: nil) }
                 
-                // Scale Meters -> Millimeters
                 let scaleFactor: Float = 1000.0
                 let scaleMatrix = matrix_float4x4(diagonal: SIMD4<Float>(scaleFactor, scaleFactor, scaleFactor, 1))
                 

@@ -6,11 +6,14 @@ struct DesignSceneWrapper: NSViewRepresentable {
     let isCleanupMode: Bool
     let cropBox: (min: SCNVector3, max: SCNVector3)
     
+    // Auto-fit callback
+    var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)?
+    
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView()
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
-        view.backgroundColor = NSColor.darkGray
+        view.backgroundColor = NSColor.black
         view.scene = SCNScene()
         return view
     }
@@ -18,86 +21,101 @@ struct DesignSceneWrapper: NSViewRepresentable {
     func updateNSView(_ uiView: SCNView, context: Context) {
         guard let root = uiView.scene?.rootNode else { return }
         
-        // 1. Load Patient Scan
-        let patientName = "PATIENT"
-        var patientNode = root.childNode(withName: patientName, recursively: false)
+        let name = "PATIENT_MODEL"
+        var modelNode = root.childNode(withName: name, recursively: false)
         
-        if patientNode == nil {
+        // 1. Load if missing
+        if modelNode == nil {
             if let node = try? SCNScene(url: scanURL, options: nil).rootNode.childNodes.first {
-                node.name = patientName
-                // Reset position to center it
-                node.position = SCNVector3Zero
-                // Basic material
-                node.geometry?.firstMaterial?.diffuse.contents = NSColor.lightGray
-                node.geometry?.firstMaterial?.isDoubleSided = true
-                root.addChildNode(node)
-                patientNode = node
+                node.name = name
                 
-                // Frame the camera once
+                // Reset Pivot to Center
+                let (min, max) = node.boundingBox
+                node.pivot = SCNMatrix4MakeTranslation((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2)
+                node.position = SCNVector3Zero
+                node.geometry?.firstMaterial?.isDoubleSided = true
+                
+                root.addChildNode(node)
+                modelNode = node
+                
+                // Calculate Size for UI Sliders
+                let w = CGFloat(max.x - min.x)
+                let h = CGFloat(max.y - min.y)
+                let d = CGFloat(max.z - min.z)
+                let pad = w * 0.1
+                
                 DispatchQueue.main.async {
+                    self.onModelLoaded?((
+                        min: SCNVector3(-w/2 - pad, -h/2 - pad, -d/2 - pad),
+                        max: SCNVector3(w/2 + pad, h/2 + pad, d/2 + pad)
+                    ))
                     uiView.defaultCameraController.frameNodes([node])
                 }
             }
         }
         
-        // 2. Apply Cleanup Shader
+        // 2. Crop Logic
         if isCleanupMode {
-            // Visualize the Crop Box (Optional Wireframe)
-            visualizeCropBox(in: root, min: cropBox.min, max: cropBox.max)
-            
-            // Apply Shader Modifier to discard fragments outside the box
-            // We use scn_node.modelTransform to keep cropping relative to the model
+            // A. Shader
+            // Note: We use the node's local bounding box logic.
+            // Since we centered the pivot, local (0,0,0) is the center of the model.
             let shader = """
             #pragma transparent
             #pragma body
-            
             float3 p = _surface.position;
-            // Convert View Space (surface.position) to Model Space if needed, 
-            // but usually cropping in World/Model space is intuitive.
-            // Simplified: We assume model is at 0,0,0.
-            
-            // Check Bounds
-            if (p.x < \(cropBox.min.x) || p.x > \(cropBox.max.x) ||
-                p.y < \(cropBox.min.y) || p.y > \(cropBox.max.y) ||
-                p.z < \(cropBox.min.z) || p.z > \(cropBox.max.z)) {
+            if (p.x < custom_minX || p.x > custom_maxX ||
+                p.y < custom_minY || p.y > custom_maxY ||
+                p.z < custom_minZ || p.z > custom_maxZ) {
                 discard_fragment();
             }
             """
-            // Note: This is a view-space crop. For precise model-space cropping,
-            // we'd multiply by inverse view transform.
-            // For this UI, "View Space" cropping means the box stays with camera.
-            // "Model Space" means box stays with teeth.
-            // We'll stick to simple coordinate checking for stability.
             
-            patientNode?.geometry?.shaderModifiers = [.surface: shader]
+            if modelNode?.geometry?.shaderModifiers == nil {
+                modelNode?.geometry?.shaderModifiers = [.surface: shader]
+            }
+            
+            // B. Update Uniforms (Crucial for Slider Interactivity)
+            if let mat = modelNode?.geometry?.firstMaterial {
+                mat.setValue(cropBox.min.x, forKey: "custom_minX")
+                mat.setValue(cropBox.max.x, forKey: "custom_maxX")
+                mat.setValue(cropBox.min.y, forKey: "custom_minY")
+                mat.setValue(cropBox.max.y, forKey: "custom_maxY")
+                mat.setValue(cropBox.min.z, forKey: "custom_minZ")
+                mat.setValue(cropBox.max.z, forKey: "custom_maxZ")
+            }
+            
+            // C. Visual Box
+            drawBox(root: root, min: cropBox.min, max: cropBox.max)
             
         } else {
-            // Remove Shader and Box when not cleaning
-            patientNode?.geometry?.shaderModifiers = nil
-            root.childNode(withName: "CROP_GIZMO", recursively: false)?.removeFromParentNode()
+            modelNode?.geometry?.shaderModifiers = nil
+            root.childNode(withName: "CROP_BOX", recursively: false)?.removeFromParentNode()
         }
     }
     
-    private func visualizeCropBox(in root: SCNNode, min: SCNVector3, max: SCNVector3) {
-        let name = "CROP_GIZMO"
-        root.childNode(withName: name, recursively: false)?.removeFromParentNode()
+    private func drawBox(root: SCNNode, min: SCNVector3, max: SCNVector3) {
+        let name = "CROP_BOX"
+        var boxNode = root.childNode(withName: name, recursively: false)
         
-        let width = CGFloat(max.x - min.x)
-        let height = CGFloat(max.y - min.y)
-        let length = CGFloat(max.z - min.z)
+        if boxNode == nil {
+            let box = SCNBox(width: 1, height: 1, length: 1, chamferRadius: 0)
+            box.firstMaterial?.diffuse.contents = NSColor.yellow
+            box.firstMaterial?.emission.contents = NSColor.yellow
+            box.firstMaterial?.fillMode = .lines
+            let node = SCNNode(geometry: box)
+            node.name = name
+            root.addChildNode(node)
+            boxNode = node
+        }
         
-        let box = SCNBox(width: width, height: height, length: length, chamferRadius: 0)
-        box.firstMaterial?.diffuse.contents = NSColor.red.withAlphaComponent(0.2)
-        box.firstMaterial?.fillMode = .lines // Wireframe
+        let w = CGFloat(max.x - min.x)
+        let h = CGFloat(max.y - min.y)
+        let l = CGFloat(max.z - min.z)
         
-        let node = SCNNode(geometry: box)
-        node.name = name
-        // Center the box
-        node.position = SCNVector3(
-            (min.x + max.x) / 2,
-            (min.y + max.y) / 2,
-            (min.z + max.z) / 2
-        )
-        root.addChildNode(node)
+        if let geo = boxNode?.geometry as? SCNBox {
+            geo.width = w; geo.height = h; geo.length = l
+        }
+        
+        boxNode?.position = SCNVector3((min.x + max.x)/2, (min.y + max.y)/2, (min.z + max.z)/2)
     }
 }
