@@ -85,7 +85,7 @@ struct ScannerContainerView: View {
                             Text("Model Ready")
                                 .font(.headline)
                             
-                            // --- NEW: DOWNLOAD BUTTON ---
+                            // DOWNLOAD BUTTON
                             Button(action: {
                                 isExporting = true
                             }) {
@@ -181,13 +181,17 @@ struct ScannerContainerView: View {
     }
 }
 
-// MARK: - Local Helpers
+// MARK: - Updated SceneView Wrapper (Invisible Box Logic)
 
 struct SceneViewWrapper: NSViewRepresentable {
     let modelURL: URL
     
     func makeNSView(context: Context) -> SCNView {
         let view = SCNView()
+        // OrbitArcball allows rotation around the object center naturally
+        view.defaultCameraController.interactionMode = .orbitArcball
+        view.defaultCameraController.inertiaEnabled = true
+        view.defaultCameraController.automaticTarget = false // We manually target the center
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor.darkGray
@@ -195,14 +199,67 @@ struct SceneViewWrapper: NSViewRepresentable {
     }
     
     func updateNSView(_ uiView: SCNView, context: Context) {
-        if uiView.scene?.rootNode.name != modelURL.path {
+        // Reload if the scene is new or empty
+        if uiView.scene == nil || uiView.scene?.rootNode.name != modelURL.path {
             do {
-                let scene = try SCNScene(url: modelURL, options: nil)
-                scene.rootNode.name = modelURL.path
-                uiView.scene = scene
+                // 1. Load Source Scene
+                let sourceScene = try SCNScene(url: modelURL, options: nil)
+                
+                // 2. Create Clean Destination Scene
+                let cleanScene = SCNScene()
+                cleanScene.rootNode.name = modelURL.path
+                
+                // 3. Find Geometry
+                if let geoNode = findFirstGeometryNode(in: sourceScene.rootNode) {
+                    
+                    // Clone to detach
+                    let node = geoNode.clone()
+                    node.name = "PREVIEW_MODEL"
+                    
+                    // --- CENTERING LOGIC (The "Invisible Box") ---
+                    // Calculate the geometric center of the bounding box
+                    if let geo = node.geometry {
+                        let (min, max) = geo.boundingBox
+                        let cx = (min.x + max.x) / 2
+                        let cy = (min.y + max.y) / 2
+                        let cz = (min.z + max.z) / 2
+                        
+                        // Set the pivot point to this center
+                        node.pivot = SCNMatrix4MakeTranslation(cx, cy, cz)
+                    }
+                    
+                    // Place the node at World Origin (0,0,0)
+                    node.position = SCNVector3Zero
+                    
+                    // Ensure materials are visible and not glossy (Matte)
+                    node.geometry?.materials.forEach { mat in
+                        mat.lightingModel = .lambert
+                        mat.isDoubleSided = true
+                    }
+                    
+                    cleanScene.rootNode.addChildNode(node)
+                    uiView.scene = cleanScene
+                    
+                    // 4. Force Camera Target to Origin
+                    // Since the model is centered at 0,0,0, the camera will rotate perfectly around it.
+                    uiView.defaultCameraController.target = SCNVector3Zero
+                    
+                } else {
+                    // Fallback for empty scenes
+                    uiView.scene = sourceScene
+                }
+                
             } catch {
                 print("Failed to load scene: \(error)")
             }
         }
+    }
+    
+    private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
+        if node.geometry != nil { return node }
+        for child in node.childNodes {
+            if let found = findFirstGeometryNode(in: child) { return found }
+        }
+        return nil
     }
 }

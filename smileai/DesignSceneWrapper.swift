@@ -26,6 +26,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
     var isPlacingLandmarks: Bool
     var onLandmarkPicked: ((SCNVector3) -> Void)?
     
+    // SNAPSHOT SUPPORT
+    @Binding var triggerSnapshot: Bool
+    var onSnapshotTaken: ((NSImage) -> Void)?
+    
     var showGrid: Bool
     var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)?
     
@@ -33,8 +37,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         let view = EditorView()
         view.defaultCameraController.interactionMode = .orbitArcball
         view.defaultCameraController.inertiaEnabled = true
-        view.defaultCameraController.automaticTarget = false // We lock to (0,0,0)
-        
+        view.defaultCameraController.automaticTarget = false
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
@@ -51,9 +54,18 @@ struct DesignSceneWrapper: NSViewRepresentable {
         view.isPlacingLandmarks = isPlacingLandmarks
         view.onLandmarkPicked = onLandmarkPicked
         
+        // CHECK SNAPSHOT TRIGGER
+        if triggerSnapshot {
+            DispatchQueue.main.async {
+                let image = view.snapshot()
+                onSnapshotTaken?(image)
+                triggerSnapshot = false // Reset trigger
+            }
+        }
+        
         guard let root = view.scene?.rootNode else { return }
         
-        // 1. SETUP THE INVISIBLE BOX (Container)
+        // 1. SETUP CONTAINER
         var container = root.childNode(withName: "CONTENT_CONTAINER", recursively: false)
         if container == nil {
             container = SCNNode()
@@ -61,7 +73,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
             root.addChildNode(container!)
         }
         
-        // 2. LOAD MODEL INTO BOX
+        // 2. LOAD MODEL
         if container?.childNode(withName: "PATIENT_MODEL", recursively: true) == nil {
             if let scene = try? SCNScene(url: scanURL, options: nil),
                let geoNode = findFirstGeometryNode(in: scene.rootNode) {
@@ -69,17 +81,14 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 let node = geoNode.clone()
                 node.name = "PATIENT_MODEL"
                 
-                // Initial Centering: Move Geometry center to Container Origin (0,0,0)
                 if let geo = node.geometry {
                     let (min, max) = geo.boundingBox
                     let cx = (min.x + max.x) / 2
                     let cy = (min.y + max.y) / 2
                     let cz = (min.z + max.z) / 2
-                    // Shift model opposite to its center
                     node.position = SCNVector3(-cx, -cy, -cz)
                 }
                 
-                // Matte Material
                 node.geometry?.materials.forEach { mat in
                     mat.lightingModel = .lambert
                     mat.isDoubleSided = true
@@ -92,24 +101,16 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 container?.addChildNode(node)
                 
                 DispatchQueue.main.async {
-                    // Camera looks at the BOX center (0,0,0) which is perfect.
                     view.defaultCameraController.target = SCNVector3Zero
                     view.defaultCameraController.frameNodes([container!])
                 }
             }
         }
         
-        // 3. SMART CENTERING (The Fix)
-        // As you click landmarks, slide the model so the landmark is at (0,0,0)
-        // This keeps the camera steady while the face moves into focus.
+        // 3. CENTERING
         if mode == .analysis, let lastType = LandmarkType.allCases.last(where: { landmarks[$0] != nil }), let worldPos = landmarks[lastType] {
-             // We don't move the model constantly to avoid jitter, but we can set the pivot.
-             // Better: Set camera target to the landmark relative to world.
              view.defaultCameraController.target = worldPos
         }
-        
-        // 4. DESIGN ALIGNMENT
-        // In Design Mode, center strictly on the Smile (Midpoint of Canines)
         if mode == .design, let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
              let center = SCNVector3((lC.x+rC.x)/2, (lC.y+rC.y)/2, (lC.z+rC.z)/2)
              view.defaultCameraController.target = center
@@ -129,7 +130,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
-    // MARK: - ESTHETIC ANALYSIS (From Your Photos)
+    // MARK: - ESTHETIC ANALYSIS
     private func drawEstheticAnalysis(root: SCNNode) {
         let containerName = "ESTHETIC_LINES"
         root.childNode(withName: containerName, recursively: false)?.removeFromParentNode()
@@ -145,64 +146,42 @@ struct DesignSceneWrapper: NSViewRepresentable {
             container.addChildNode(SCNNode(geometry: geo))
         }
         
-        // 1. HORIZON & MIDLINE (Image: Face with crosshairs)
         if let lp = landmarks[.leftPupil], let rp = landmarks[.rightPupil] {
-            // Interpupillary Line (Yellow)
             drawLine(lp, rp, color: .yellow)
-            
-            // Facial Midline (Cyan) - Perpendicular bisector
             let mid = SCNVector3((lp.x+rp.x)/2, (lp.y+rp.y)/2, (lp.z+rp.z)/2)
             let drop = SCNVector3(mid.x, mid.y - 0.20, mid.z)
             drawLine(mid, drop, color: .cyan)
         }
         
-        // 2. FACIAL THIRDS (Image: Ideal vertical position)
         if let gl = landmarks[.glabella], let sn = landmarks[.subnasale], let me = landmarks[.menton] {
-            let w: CGFloat = 0.06 // Width of lines
-            // Glabella Plane
+            let w: CGFloat = 0.06
             drawLine(SCNVector3(gl.x-w, gl.y, gl.z), SCNVector3(gl.x+w, gl.y, gl.z), color: .white)
-            // Subnasale Plane
             drawLine(SCNVector3(sn.x-w, sn.y, sn.z), SCNVector3(sn.x+w, sn.y, sn.z), color: .white)
-            // Menton Plane
             drawLine(SCNVector3(me.x-w, me.y, me.z), SCNVector3(me.x+w, me.y, me.z), color: .white)
         }
         
-        // 3. GOLDEN PROPORTION TEETH (Image: 1.618 - 1.0 - 0.618)
         if let mid = landmarks[.midline], let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
             let dx = rC.x - lC.x; let dy = rC.y - lC.y
             let archWidth = CGFloat(sqrt(dx*dx + dy*dy))
-            
-            // Formula: The visible width of Central (1.618) + Lateral (1.0) + Canine (0.618) = 3.236
-            // We have two sides, so total unit divisor is 3.236 * 2 approx (depending on arch form)
-            // Let's approximate visible width from Canine to Canine.
             let unit = archWidth / 6.472
-            
             let yTop = mid.y + 0.005; let yBot = mid.y - 0.010; let z = mid.z
             
-            // Central Incisors (1.618 units)
             let wCent = unit * 1.618
-            drawLine(SCNVector3(mid.x, yTop, z), SCNVector3(mid.x, yBot, z), color: .red) // Midline
+            drawLine(SCNVector3(mid.x, yTop, z), SCNVector3(mid.x, yBot, z), color: .red)
             drawLine(SCNVector3(mid.x + wCent, yTop, z), SCNVector3(mid.x + wCent, yBot, z), color: .red)
             drawLine(SCNVector3(mid.x - wCent, yTop, z), SCNVector3(mid.x - wCent, yBot, z), color: .red)
             
-            // Lateral Incisors (1.0 unit)
             let wLat = wCent + (unit * 1.0)
             drawLine(SCNVector3(mid.x + wLat, yTop, z), SCNVector3(mid.x + wLat, yBot, z), color: .blue)
             drawLine(SCNVector3(mid.x - wLat, yTop, z), SCNVector3(mid.x - wLat, yBot, z), color: .blue)
             
-            // Canines (0.618 unit - visible part)
             let wCan = wLat + (unit * 0.618)
             drawLine(SCNVector3(mid.x + wCan, yTop, z), SCNVector3(mid.x + wCan, yBot, z), color: .green)
             drawLine(SCNVector3(mid.x - wCan, yTop, z), SCNVector3(mid.x - wCan, yBot, z), color: .green)
         }
         
-        // 4. LIP PROPORTIONS (Image: Box around lips)
         if let sn = landmarks[.subnasale], let me = landmarks[.menton], let st = landmarks[.upperLipCenter] {
-            // "Stomion" (Mouth closure) is approx upperLipCenter y
-            // Draw verticals connecting nose to chin
             drawLine(sn, me, color: .gray)
-            
-            // Draw Horizontal at Stomion
             let w: CGFloat = 0.03
             drawLine(SCNVector3(st.x - w, st.y, st.z), SCNVector3(st.x + w, st.y, st.z), color: .magenta)
         }
@@ -226,7 +205,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
             case .subnasale, .menton: color = .white
             default: color = .blue
             }
-            
             sphere.firstMaterial?.diffuse.contents = color
             sphere.firstMaterial?.emission.contents = color
             let node = SCNNode(geometry: sphere)
@@ -273,7 +251,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
             let pz = CGFloat(basePos.z) + CGFloat(smileParams.posZ) * 0.05
             templateNode?.position = SCNVector3(px, py, pz)
             
-            // Fix Cant using Pupils
             if let lp = landmarks[.leftPupil], let rp = landmarks[.rightPupil] {
                 let dy = rp.y - lp.y
                 let dx = rp.x - lp.x
@@ -349,7 +326,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
     }
 }
 
-// MARK: - Editor View (Unchanged Logic, Included for Completeness)
 class EditorView: SCNView {
     var currentMode: DesignMode = .analysis
     var activeLandmarkType: LandmarkType?
