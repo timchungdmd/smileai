@@ -17,10 +17,29 @@ struct ScannerContainerView: View {
         HStack(spacing: 0) {
             // LEFT PANEL
             VStack(spacing: 20) {
-                Text("Dental Studio")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
-                    .padding(.top)
+                // Header with Title and optional Delete Button
+                HStack {
+                    Text("Dental Studio")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                    
+                    Spacer()
+                    
+                    if viewModel.state.hasModel {
+                        Button(action: {
+                            // Trigger deletion confirmation without a new import pending
+                            pendingImportURL = nil
+                            showOverwriteAlert = true
+                        }) {
+                            Image(systemName: "trash.fill")
+                                .foregroundStyle(.red)
+                                .font(.title2)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete Current Model")
+                    }
+                }
+                .padding(.top)
                 
                 Divider()
                 
@@ -116,7 +135,7 @@ struct ScannerContainerView: View {
                 }
             }
         }
-        // SYNC LOGIC (Updated for macOS 14 deprecation)
+        // SYNC LOGIC
         .onChange(of: viewModel.state) { _, newState in
             if case .completed(let url) = newState {
                 print("✅ Syncing Model to Design Tab: \(url.path)")
@@ -128,21 +147,26 @@ struct ScannerContainerView: View {
             if case .success(let url) = result { viewModel.exportSTL(to: url) }
         }
         // DELETION ALERT
-        .alert("Start New Reconstruction?", isPresented: $showOverwriteAlert) {
+        .alert(pendingImportURL == nil ? "Delete Model?" : "Start New Reconstruction?", isPresented: $showOverwriteAlert) {
             Button("Cancel", role: .cancel) {
                 pendingImportURL = nil
             }
-            Button("Delete & Start", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 viewModel.resetAndCleanup()
                 session.activeScanURL = nil
                 
+                // If we had a pending import (drag & drop), start it now
                 if let url = pendingImportURL {
                     viewModel.ingest(url: url)
                 }
                 pendingImportURL = nil
             }
         } message: {
-            Text("This will permanently delete the current model and any unsaved changes in the Smile Design tab.")
+            if pendingImportURL == nil {
+                Text("Are you sure you want to delete this model? This action cannot be undone.")
+            } else {
+                Text("This will permanently delete the current model and any unsaved changes in the Smile Design tab.")
+            }
         }
     }
 }

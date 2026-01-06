@@ -1,5 +1,7 @@
 import SwiftUI
 import SceneKit
+import ModelIO
+import SceneKit.ModelIO
 
 // Params struct
 struct SmileTemplateParams {
@@ -21,6 +23,13 @@ struct DesignSceneWrapper: NSViewRepresentable {
     
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
+        
+        // --- IMPROVED CAMERA CONTROLS ---
+        // OrbitArcball allows free rotation around the center (like holding it in hand)
+        view.defaultCameraController.interactionMode = .orbitArcball
+        view.defaultCameraController.inertiaEnabled = true
+        view.defaultCameraController.automaticTarget = true
+        
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
@@ -29,42 +38,72 @@ struct DesignSceneWrapper: NSViewRepresentable {
     }
     
     func updateNSView(_ view: EditorView, context: Context) {
-        // 1. Mode Sync
+        // Mode Sync
         view.allowsCameraControl = !isCleanupMode
         view.isPaintMode = isCleanupMode
         
-        // 2. Handle Deletion
+        // Handle Deletion
         if triggerDelete {
             let indices = view.selectedIndices
             if !indices.isEmpty {
-                onDelete?(indices)
                 view.clearSelection()
+                DispatchQueue.main.async {
+                    onDelete?(indices)
+                    triggerDelete = false
+                }
+            } else {
+                DispatchQueue.main.async { triggerDelete = false }
             }
-            DispatchQueue.main.async { triggerDelete = false }
         }
         
         guard let root = view.scene?.rootNode else { return }
         
-        // 3. Load Model (Robust Finder)
+        // Load Model (Robust Finder)
         if root.childNodes.isEmpty {
             if let scene = try? SCNScene(url: scanURL, options: nil),
                let geoNode = findFirstGeometryNode(in: scene.rootNode) {
                 
-                // Clone node to detach from original file structure
                 let node = geoNode.clone()
                 node.name = "PATIENT_MODEL"
                 
-                // Normalize Position (Center at 0,0,0)
+                // --- FIX 1: PERFECT CENTERING ---
+                // Calculate the true center of the geometry
                 let (min, max) = node.boundingBox
-                node.pivot = SCNMatrix4MakeTranslation((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2)
+                let cx = (min.x + max.x) / 2
+                let cy = (min.y + max.y) / 2
+                let cz = (min.z + max.z) / 2
+                
+                // Set the Pivot to that center point
+                node.pivot = SCNMatrix4MakeTranslation(cx, cy, cz)
+                // Place the node at the world origin
                 node.position = SCNVector3Zero
                 
-                // Setup Material (Vertex Color Friendly)
-                let mat = SCNMaterial()
-                mat.diffuse.contents = NSColor.white
-                mat.lightingModel = .physicallyBased
-                mat.isDoubleSided = true
-                node.geometry?.materials = [mat]
+                // --- FIX 2: TANGENTS & VISUALS ---
+                // Generate Tangents to prevent "missing attribute" crashes
+                if let geo = node.geometry, geo.sources(for: .tangent).isEmpty {
+                    let mdlMesh = MDLMesh(scnGeometry: geo)
+                    mdlMesh.addTangentBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
+                                            normalAttributeNamed: MDLVertexAttributeNormal,
+                                            tangentAttributeNamed: MDLVertexAttributeTangent)
+                    let newGeo = SCNGeometry(mdlMesh: mdlMesh)
+                    newGeo.materials = geo.materials // Keep original textures
+                    node.geometry = newGeo
+                }
+                
+                // --- FIX 3: REMOVE WHITE OVERLAY ---
+                node.geometry?.materials.forEach { mat in
+                    // Use Blinn shading (classic) instead of PBR.
+                    // PBR can look washed out (white) if no environment map is present.
+                    mat.lightingModel = .blinn
+                    
+                    // Make it Matte (not shiny) to see texture clearly
+                    mat.specular.contents = NSColor(white: 0.1, alpha: 1.0)
+                    mat.roughness.contents = 0.8
+                    mat.metalness.contents = 0.0
+                    
+                    // Ensure we see inside the mesh
+                    mat.isDoubleSided = true
+                }
                 
                 root.addChildNode(node)
                 
@@ -73,17 +112,18 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 
                 DispatchQueue.main.async {
                     self.onModelLoaded?((min: min, max: max))
+                    // Force camera to re-center on the new pivot
+                    view.defaultCameraController.target = SCNVector3Zero
                     view.defaultCameraController.frameNodes([node])
                 }
             }
         }
         
-        // 4. Update Features
+        // Update Features
         updateSmileTemplate(root: root, patientNode: root.childNode(withName: "PATIENT_MODEL", recursively: true))
         updateGrid(root: root)
     }
     
-    // Helper to find deep geometry
     private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
         if node.geometry != nil { return node }
         for child in node.childNodes {
@@ -92,7 +132,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
-    // MARK: - Smile Template Logic (Same as before)
+    // MARK: - Smile Template Logic
     private func updateSmileTemplate(root: SCNNode, patientNode: SCNNode?) {
         let name = "SMILE_TEMPLATE"
         var templateNode = root.childNode(withName: name, recursively: false)
@@ -104,12 +144,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 root.addChildNode(templateNode!)
             }
             
-            // Auto-Scale
             var unitScale: CGFloat = 1.0
             if let pNode = patientNode {
                 let (min, max) = pNode.boundingBox
-                let width = max.x - min.x
-                if width > 10 { unitScale = 1000.0 }
+                if (max.x - min.x) > 10 { unitScale = 1000.0 }
             }
             
             let moveScale = unitScale * 0.5
@@ -118,7 +156,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 CGFloat(smileParams.posY) * moveScale,
                 CGFloat(smileParams.posZ) * moveScale
             )
-            
             let s = CGFloat(smileParams.scale) * unitScale
             templateNode?.scale = SCNVector3(s, s, s)
             
@@ -191,7 +228,6 @@ class EditorView: SCNView {
     var isPaintMode: Bool = false
     private var geometryNode: SCNNode?
     
-    // 32-bit Float Color Struct (Critical for SceneKit on macOS)
     struct FloatColor { var r, g, b, a: Float }
     private var vertexColors: [FloatColor] = []
     public var selectedIndices: Set<Int> = []
@@ -199,8 +235,6 @@ class EditorView: SCNView {
     func prepareForPainting(node: SCNNode) {
         self.geometryNode = node
         guard let geo = node.geometry, let src = geo.sources(for: .vertex).first else { return }
-        
-        // Initialize White
         self.vertexColors = Array(repeating: FloatColor(r: 1, g: 1, b: 1, a: 1), count: src.vectorCount)
         updateColorGeometry()
     }
@@ -227,10 +261,9 @@ class EditorView: SCNView {
         
         let localPoint = hit.localCoordinates
         
-        // Dynamic Brush Size
         let bounds = node.boundingBox
         let scale = CGFloat(bounds.max.x - bounds.min.x)
-        let r = max(scale * 0.03, 0.002) // 3% of model width
+        let r = max(scale * 0.03, 0.002)
         let rSq = r*r
         
         guard let vertexSource = geo.sources(for: .vertex).first else { return }

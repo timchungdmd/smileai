@@ -24,18 +24,68 @@ struct SmileDesignView: View {
     @State private var triggerDeleteSignal: Bool = false
     @State private var isProcessing: Bool = false
     @State private var statusMessage: String = ""
+    
+    // --- IMPORT / EXPORT / DELETE ---
     @State private var isExporting = false
+    @State private var isImporting = false // NEW: Import State
+    @State private var showDeleteConfirmation = false // NEW: Delete Alert
     @State private var selectedFormat: GeometryUtils.ExportFormat = .stl
     
     var body: some View {
         HStack(spacing: 0) {
             // LEFT PANEL
             VStack(alignment: .leading, spacing: 20) {
-                Text("Smile Studio").font(.title2).bold().padding(.top)
+                
+                // --- HEADER & GLOBAL ACTIONS ---
+                HStack {
+                    Text("Smile Studio")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    Spacer()
+                    
+                    // NEW: Import Button (Always visible)
+                    Button(action: { isImporting = true }) {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .help("Import 3D Model")
+                    .buttonStyle(.plain)
+                    .font(.title2)
+                    
+                    // NEW: Delete/Clear Button (Only if model exists)
+                    if session.activeScanURL != nil {
+                        Button(action: { showDeleteConfirmation = true }) {
+                            Image(systemName: "trash")
+                                .foregroundStyle(.red)
+                        }
+                        .help("Remove Model")
+                        .buttonStyle(.plain)
+                        .font(.title2)
+                        .padding(.leading, 8)
+                    }
+                }
+                .padding(.top)
+                
+                Divider()
                 
                 if session.activeScanURL == nil {
-                    ContentUnavailableView("No Scan", systemImage: "cube.transparent")
+                    // --- EMPTY STATE ---
+                    VStack(spacing: 15) {
+                        Spacer()
+                        ContentUnavailableView("No Model Loaded", systemImage: "cube.transparent", description: Text("Scan a patient or import a file."))
+                        
+                        Button("Import 3D Model") {
+                            isImporting = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    
                 } else {
+                    // --- ACTIVE TOOLS ---
                     Picker("Mode", selection: Binding(
                         get: { isSmileDesignMode ? 1 : 0 },
                         set: { isSmileDesignMode = ($0 == 1); isCleanupMode = ($0 == 0) }
@@ -91,6 +141,7 @@ struct SmileDesignView: View {
                                     SliderRow(label: "Width", value: $archWidth, range: 0.5...2.0)
                                     SliderRow(label: "Curve", value: $archCurve, range: 0.0...1.0)
                                     SliderRow(label: "Length", value: $toothLength, range: 0.5...2.0)
+                                    SliderRow(label: "Ratio", value: $toothRatio, range: 0.5...1.0)
                                 }
                             }
                         }
@@ -103,6 +154,7 @@ struct SmileDesignView: View {
                     
                     Divider()
                     
+                    // --- EXPORT ---
                     HStack {
                         Picker("", selection: $selectedFormat) {
                             Text("STL").tag(GeometryUtils.ExportFormat.stl)
@@ -133,10 +185,66 @@ struct SmileDesignView: View {
                 )
                 .id(url)
             } else {
-                Text("3D Workspace").foregroundStyle(.gray)
+                ZStack {
+                    Color(nsColor: .black)
+                    Text("3D Workspace").foregroundStyle(.gray)
+                }
             }
         }
+        // EXPORTER
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType(filenameExtension: selectedFormat.rawValue) ?? .data, defaultFilename: "DentalProject") { _ in }
+        // NEW: IMPORTER
+        .fileImporter(isPresented: $isImporting, allowedContentTypes: [
+            UTType(filenameExtension: "usdz")!,
+            UTType(filenameExtension: "usd")!,
+            UTType(filenameExtension: "obj")!,
+            UTType(filenameExtension: "stl")!,
+            UTType(filenameExtension: "ply")!
+        ]) { result in
+            handleImport(result)
+        }
+        // NEW: DELETE CONFIRMATION
+        .alert("Remove Model?", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) {
+                // Clear the session
+                session.activeScanURL = nil
+                statusMessage = ""
+            }
+        } message: {
+            Text("This will remove the current model from the scene. Unsaved changes will be lost.")
+        }
+    }
+    
+    // MARK: - Logic
+    
+    func handleImport(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            guard url.startAccessingSecurityScopedResource() else {
+                statusMessage = "❌ Permission denied."
+                return
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+            
+            do {
+                // Copy to Temp to ensure we have full write access for processing
+                let tempDir = FileManager.default.temporaryDirectory
+                let dstURL = tempDir.appendingPathComponent(url.lastPathComponent)
+                try? FileManager.default.removeItem(at: dstURL)
+                try FileManager.default.copyItem(at: url, to: dstURL)
+                
+                // Update Session
+                DispatchQueue.main.async {
+                    session.activeScanURL = dstURL
+                    statusMessage = "✅ Imported: \(url.lastPathComponent)"
+                }
+            } catch {
+                statusMessage = "❌ Import Failed: \(error.localizedDescription)"
+            }
+        case .failure(let error):
+            statusMessage = "❌ Import Error: \(error.localizedDescription)"
+        }
     }
     
     func performDeletion(indices: Set<Int>) {

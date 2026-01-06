@@ -3,6 +3,13 @@ import RealityKit
 import Combine
 import ModelIO
 import SceneKit.ModelIO
+import Vision
+import CoreImage
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 class ProcessingViewModel: ObservableObject {
@@ -18,20 +25,9 @@ class ProcessingViewModel: ObservableObject {
             return false
         }
         
-        // Helper to check if we have an active model
         var hasModel: Bool {
             if case .completed = self { return true }
             return false
-        }
-        
-        static func == (lhs: State, rhs: State) -> Bool {
-            switch (lhs, rhs) {
-            case (.idle, .idle): return true
-            case (.processing, .processing): return true
-            case (.completed(let a), .completed(let b)): return a == b
-            case (.failed(let a), .failed(let b)): return a == b
-            default: return false
-            }
         }
     }
     
@@ -44,26 +40,17 @@ class ProcessingViewModel: ObservableObject {
     
     // MARK: - Cleanup Logic
     
-    /// Deletes the current model file and resets state
     func resetAndCleanup() {
         if let url = currentModelURL {
-            do {
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try FileManager.default.removeItem(at: url)
-                    self.log("🗑️ Previous model deleted.")
-                }
-            } catch {
-                self.log("⚠️ Failed to delete old model: \(error.localizedDescription)")
-            }
+            try? FileManager.default.removeItem(at: url)
+            self.log("🗑️ Previous model deleted.")
         }
-        
-        // Reset State
         self.currentModelURL = nil
         self.state = .idle
         self.consoleLog = "Ready for new scan."
     }
     
-    // MARK: - Ingestion & Processing
+    // MARK: - Ingestion & Smart Processing
     
     func ingest(url: URL) {
         let access = url.startAccessingSecurityScopedResource()
@@ -77,7 +64,7 @@ class ProcessingViewModel: ObservableObject {
                 // 1. Unzip if needed
                 if ["zip", "ar"].contains(url.pathExtension.lowercased()) {
                     self.log("📦 Decompressing Archive...")
-                    inputRoot = try ZipUtilities.unzip(fileURL: url)
+                    inputRoot = try await Task.detached { try ZipUtilities.unzip(fileURL: url) }.value
                 }
                 
                 // 2. Find Images
@@ -85,19 +72,28 @@ class ProcessingViewModel: ObservableObject {
                     throw NSError(domain: "App", code: 404, userInfo: [NSLocalizedDescriptionKey: "No valid images found."])
                 }
                 
-                // 3. Count
-                let validExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
-                let files = try? FileManager.default.contentsOfDirectory(at: dataFolder, includingPropertiesForKeys: nil)
-                let imageCount = files?.filter { validExtensions.contains($0.pathExtension.lowercased()) }.count ?? 0
+                // 3. SMART CROP (The AI Step)
+                self.log("✂️ AI Analysis: Cropping to Face...")
+                let croppedFolder = try await performSmartCrop(in: dataFolder, margin: 0.5)
                 
-                self.log("📸 Found \(imageCount) images.")
+                // 4. Count Valid Images
+                let validExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
+                let files = try FileManager.default.contentsOfDirectory(at: croppedFolder, includingPropertiesForKeys: nil)
+                let imageCount = files.filter { validExtensions.contains($0.pathExtension.lowercased()) }.count
+                
+                self.log("📸 Found \(imageCount) valid face images.")
                 
                 guard imageCount >= 10 else {
-                    throw NSError(domain: "App", code: 400, userInfo: [NSLocalizedDescriptionKey: "Need at least 10 images."])
+                    throw NSError(domain: "App", code: 400, userInfo: [NSLocalizedDescriptionKey: "Need at least 10 images with detected faces."])
                 }
                 
-                // 4. Run Photogrammetry
-                await runPhotogrammetry(inputFolder: dataFolder, imageCount: imageCount)
+                // 5. Run Photogrammetry
+                await runPhotogrammetry(inputFolder: croppedFolder, imageCount: imageCount)
+                
+                // 6. AUTO-CLEANUP (New Step)
+                // Delete the temp folder containing cropped images to free up space
+                try? FileManager.default.removeItem(at: croppedFolder)
+                self.log("🧹 Cleaned up temporary files.")
                 
             } catch {
                 self.state = .failed(error: error.localizedDescription)
@@ -105,6 +101,64 @@ class ProcessingViewModel: ObservableObject {
             }
         }
     }
+    
+    // MARK: - Smart Cropping Logic (Non-Isolated)
+    
+    nonisolated private func performSmartCrop(in inputURL: URL, margin: CGFloat) async throws -> URL {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent("SmartCrop_\(UUID().uuidString)")
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        let fileURLs = try fileManager.contentsOfDirectory(at: inputURL, includingPropertiesForKeys: nil)
+        let imageExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
+        
+        let context = CIContext(options: [.cacheIntermediates: false])
+        
+        for fileURL in fileURLs {
+            if Task.isCancelled { break }
+            guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
+            
+            guard let ciImage = CIImage(contentsOf: fileURL) else { continue }
+            
+            let request = VNDetectFaceRectanglesRequest()
+            let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+            
+            do {
+                try handler.perform([request])
+                guard let face = request.results?.sorted(by: { $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height }).first else {
+                    continue
+                }
+                
+                let w = CGFloat(ciImage.extent.width)
+                let h = CGFloat(ciImage.extent.height)
+                let bbox = face.boundingBox
+                
+                let rect = CGRect(
+                    x: bbox.origin.x * w,
+                    y: bbox.origin.y * h,
+                    width: bbox.width * w,
+                    height: bbox.height * h
+                )
+                
+                let insetX = -(rect.width * margin) / 2
+                let insetY = -(rect.height * margin) / 2
+                let cropRect = rect.insetBy(dx: insetX, dy: insetY).intersection(ciImage.extent)
+                
+                let croppedImage = ciImage.cropped(to: cropRect)
+                let destURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
+                
+                if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
+                    try context.writeHEIFRepresentation(of: croppedImage, to: destURL, format: .RGBA8, colorSpace: colorSpace)
+                }
+            } catch {
+                print("Skipping \(fileURL.lastPathComponent)")
+            }
+        }
+        
+        return tempDir
+    }
+    
+    // MARK: - Photogrammetry
     
     private func runPhotogrammetry(inputFolder: URL, imageCount: Int) async {
         self.startTime = Date()
@@ -123,8 +177,6 @@ class ProcessingViewModel: ObservableObject {
             var config = PhotogrammetrySession.Configuration()
             config.featureSensitivity = .high
             config.sampleOrdering = .unordered
-            
-            // Enable Apple's built-in masking
             config.isObjectMaskingEnabled = true
             
             let session = try PhotogrammetrySession(input: inputFolder, configuration: config)
@@ -138,7 +190,6 @@ class ProcessingViewModel: ObservableObject {
                     await MainActor.run {
                         let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
                         self.state = .processing(progress: fraction, timeElapsed: elapsed)
-                        
                         if Int(fraction * 100) % 10 == 0 {
                             self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
                         }

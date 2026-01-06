@@ -2,6 +2,11 @@ import Foundation
 import SceneKit
 import ModelIO
 import SceneKit.ModelIO
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 class GeometryUtils {
     
@@ -12,15 +17,12 @@ class GeometryUtils {
         var id: String { rawValue }
     }
     
-    /// Deletes specific vertices and connected faces from the mesh, then exports a clean file.
     static func deleteVertices(sourceURL: URL, destinationURL: URL, indicesToDelete: Set<Int>, format: ExportFormat) throws {
         
         // 1. Load Scene
         let scene = try SCNScene(url: sourceURL, options: nil)
         
-        // --- NECESSARY UPDATE: Robust Node Finder ---
-        // Instead of just checking rootNode.childNodes.first (which fails on nested meshes),
-        // we recursively search the entire scene graph for the first node containing geometry.
+        // Robust Node Finder
         var targetNode: SCNNode?
         scene.rootNode.enumerateChildNodes { node, stop in
             if node.geometry != nil {
@@ -37,7 +39,6 @@ class GeometryUtils {
         }
         
         // 2. Map Old Indices -> New Indices
-        // -1 means the vertex is deleted.
         var oldToNewMap = [Int: Int]()
         var keptIndexCount = 0
         
@@ -54,29 +55,30 @@ class GeometryUtils {
             throw NSError(domain: "Geo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Selection would delete the entire mesh."])
         }
         
-        // 3. Rebuild Vertex Sources (Position, Normal, Color, etc.)
+        // 3. Rebuild Vertex Sources (Compact)
         var newSources: [SCNGeometrySource] = []
         
         for source in geo.sources {
-            let stride = source.dataStride
-            let offset = source.dataOffset
+            let srcStride = source.dataStride
+            let srcOffset = source.dataOffset
             let componentSize = source.bytesPerComponent * source.componentsPerVector
             
-            var newData = Data(count: keptIndexCount * stride)
+            // Compact Stride
+            let dstStride = componentSize
+            var newData = Data(count: keptIndexCount * dstStride)
             
-            // Unsafe copy of only the kept vertices
             source.data.withUnsafeBytes { srcPtr in
                 newData.withUnsafeMutableBytes { dstPtr in
-                    var dstOffset = 0
+                    var dstIndex = 0
                     for i in 0..<vertexSource.vectorCount {
                         if oldToNewMap[i]! != -1 {
-                            let srcLoc = i * stride + offset
+                            let srcLoc = i * srcStride + srcOffset
                             if srcLoc + componentSize <= srcPtr.count {
                                 let srcAddress = srcPtr.baseAddress!.advanced(by: srcLoc)
-                                let dstAddress = dstPtr.baseAddress!.advanced(by: dstOffset + offset)
+                                let dstAddress = dstPtr.baseAddress!.advanced(by: dstIndex * dstStride)
                                 dstAddress.copyMemory(from: srcAddress, byteCount: componentSize)
                             }
-                            dstOffset += stride
+                            dstIndex += 1
                         }
                     }
                 }
@@ -89,64 +91,86 @@ class GeometryUtils {
                 usesFloatComponents: source.usesFloatComponents,
                 componentsPerVector: source.componentsPerVector,
                 bytesPerComponent: source.bytesPerComponent,
-                dataOffset: source.dataOffset,
-                dataStride: source.dataStride
+                dataOffset: 0,
+                dataStride: dstStride
             )
             newSources.append(newSource)
         }
         
-        // 4. Rebuild Triangles (Indices)
-        // We only keep triangles where ALL 3 vertices survived.
+        // 4. Rebuild Triangles
         var newIndices: [UInt32] = []
-        
         element.data.withUnsafeBytes { buffer in
             let triangleCount = element.primitiveCount
             let is32Bit = element.bytesPerIndex == 4
-            
             for t in 0..<triangleCount {
                 let i = t * 3
                 let base = i * element.bytesPerIndex
+                let idx1 = is32Bit ? Int(buffer.load(fromByteOffset: base, as: UInt32.self)) : Int(buffer.load(fromByteOffset: base, as: UInt16.self))
+                let idx2 = is32Bit ? Int(buffer.load(fromByteOffset: base+4, as: UInt32.self)) : Int(buffer.load(fromByteOffset: base+2, as: UInt16.self))
+                let idx3 = is32Bit ? Int(buffer.load(fromByteOffset: base+8, as: UInt32.self)) : Int(buffer.load(fromByteOffset: base+4, as: UInt16.self))
                 
-                let idx1, idx2, idx3: Int
-                
-                if is32Bit {
-                    idx1 = Int(buffer.load(fromByteOffset: base, as: UInt32.self))
-                    idx2 = Int(buffer.load(fromByteOffset: base + 4, as: UInt32.self))
-                    idx3 = Int(buffer.load(fromByteOffset: base + 8, as: UInt32.self))
-                } else {
-                    idx1 = Int(buffer.load(fromByteOffset: base, as: UInt16.self))
-                    idx2 = Int(buffer.load(fromByteOffset: base + 2, as: UInt16.self))
-                    idx3 = Int(buffer.load(fromByteOffset: base + 4, as: UInt16.self))
-                }
-                
-                // If all 3 vertices map to valid new indices, keep the triangle
                 if let n1 = oldToNewMap[idx1], n1 != -1,
                    let n2 = oldToNewMap[idx2], n2 != -1,
                    let n3 = oldToNewMap[idx3], n3 != -1 {
-                    newIndices.append(UInt32(n1))
-                    newIndices.append(UInt32(n2))
-                    newIndices.append(UInt32(n3))
+                    newIndices.append(UInt32(n1)); newIndices.append(UInt32(n2)); newIndices.append(UInt32(n3))
                 }
             }
         }
         
+        if newIndices.isEmpty { throw NSError(domain: "Geo", code: 3, userInfo: [NSLocalizedDescriptionKey: "Resulting mesh has no faces left."]) }
+        
         let newElement = SCNGeometryElement(indices: newIndices, primitiveType: .triangles)
         let newGeo = SCNGeometry(sources: newSources, elements: [newElement])
-        
-        // Preserve Materials
         newGeo.materials = geo.materials
         
-        // 5. Export New File
+        // --- REGENERATE TANGENTS ---
+        let mdlMesh = MDLMesh(scnGeometry: newGeo)
+        mdlMesh.addTangentBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
+                                normalAttributeNamed: MDLVertexAttributeNormal,
+                                tangentAttributeNamed: MDLVertexAttributeTangent)
+        let fixedGeo = SCNGeometry(mdlMesh: mdlMesh)
+        fixedGeo.materials = geo.materials
+        
+        // 5. Export
         let outScene = SCNScene()
-        let outNode = SCNNode(geometry: newGeo)
+        let outNode = SCNNode(geometry: fixedGeo)
         outNode.name = "CleanedModel"
         outScene.rootNode.addChildNode(outNode)
+        
+        embedTextures(in: outNode)
         
         if format == .usdz {
             outScene.write(to: destinationURL, options: nil, delegate: nil, progressHandler: nil)
         } else {
             let asset = MDLAsset(scnScene: outScene)
             try asset.export(to: destinationURL)
+        }
+    }
+    
+    private static func embedTextures(in node: SCNNode) {
+        node.enumerateChildNodes { child, _ in child.geometry?.materials.forEach { embedMaterial($0) } }
+        node.geometry?.materials.forEach { embedMaterial($0) }
+    }
+    
+    private static func embedMaterial(_ mat: SCNMaterial) {
+        embedProperty(mat.diffuse); embedProperty(mat.normal); embedProperty(mat.roughness)
+        embedProperty(mat.metalness); embedProperty(mat.ambientOcclusion); embedProperty(mat.emission)
+    }
+    
+    private static func embedProperty(_ property: SCNMaterialProperty) {
+        if let url = property.contents as? URL {
+            #if os(macOS)
+            if let image = NSImage(contentsOf: url) { property.contents = image }
+            #else
+            if let image = UIImage(contentsOfFile: url.path) { property.contents = image }
+            #endif
+        } else if let path = property.contents as? String {
+            let url = URL(fileURLWithPath: path)
+            #if os(macOS)
+            if let image = NSImage(contentsOf: url) { property.contents = image }
+            #else
+            if let image = UIImage(contentsOfFile: path) { property.contents = image }
+            #endif
         }
     }
 }

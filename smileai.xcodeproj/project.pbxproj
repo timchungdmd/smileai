@@ -29,9 +29,22 @@
 		08B77C832F0ABD01001344E3 /* smileaiUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = smileaiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		08B77CE92F0CB609001344E3 /* Exceptions for "smileai" folder in "smileai" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Untitled.swift,
+			);
+			target = 08B77C692F0ABCFF001344E3 /* smileai */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		08B77C6C2F0ABCFF001344E3 /* smileai */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				08B77CE92F0CB609001344E3 /* Exceptions for "smileai" folder in "smileai" target */,
+			);
 			path = smileai;
 			sourceTree = "<group>";
 		};
