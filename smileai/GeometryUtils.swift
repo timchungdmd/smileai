@@ -5,39 +5,22 @@ import SceneKit.ModelIO
 
 class GeometryUtils {
     
-    struct CropBounds {
-        let min: SCNVector3
-        let max: SCNVector3
-    }
-    
     enum ExportFormat: String, CaseIterable, Identifiable {
         case stl = "stl"
         case obj = "obj"
-        case ply = "ply"
         case usdz = "usdz"
-        var id: String { self.rawValue }
+        var id: String { rawValue }
     }
     
-    static func cropAndExport(sourceURL: URL, destinationURL: URL, bounds: CropBounds, format: ExportFormat) throws {
-        // 1. Unzip source to temporary directory to access textures
-        let unzipDir = try ZipUtilities.unzip(fileURL: sourceURL)
-        defer {
-            try? FileManager.default.removeItem(at: unzipDir)
-        }
+    /// Deletes specific vertices and connected faces from the mesh, then exports a clean file.
+    static func deleteVertices(sourceURL: URL, destinationURL: URL, indicesToDelete: Set<Int>, format: ExportFormat) throws {
         
-        // Find the scene file inside the unzipped folder
-        let contents = try FileManager.default.contentsOfDirectory(at: unzipDir, includingPropertiesForKeys: nil)
-        guard let sceneFile = contents.first(where: { $0.pathExtension == "usdc" || $0.pathExtension == "usda" }) else {
-            throw NSError(domain: "GeoUtils", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not find scene file inside USDZ."])
-        }
+        // 1. Load Scene
+        let scene = try SCNScene(url: sourceURL, options: nil)
         
-        // Base URL for textures is the folder containing the scene file
-        let textureBaseURL = sceneFile.deletingLastPathComponent()
-        
-        // 2. Load the Source Scene
-        let scene = try SCNScene(url: sceneFile, options: nil)
-        
-        // Find geometry node
+        // --- NECESSARY UPDATE: Robust Node Finder ---
+        // Instead of just checking rootNode.childNodes.first (which fails on nested meshes),
+        // we recursively search the entire scene graph for the first node containing geometry.
         var targetNode: SCNNode?
         scene.rootNode.enumerateChildNodes { node, stop in
             if node.geometry != nil {
@@ -46,106 +29,54 @@ class GeometryUtils {
             }
         }
         
-        guard let node = targetNode, let originalGeo = node.geometry else {
-            throw NSError(domain: "GeoUtils", code: 2, userInfo: [NSLocalizedDescriptionKey: "No geometry found."])
+        guard let node = targetNode,
+              let geo = node.geometry,
+              let vertexSource = geo.sources(for: .vertex).first,
+              let element = geo.elements.first else {
+            throw NSError(domain: "Geo", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid geometry or no mesh found."])
         }
         
-        // 3. RESOLVE MATERIALS (Fixes "Failed to resolve reference" warnings)
-        // Convert all relative texture paths (e.g. "0/tex.png") to Absolute URLs (e.g. "file:///tmp/.../0/tex.png")
-        for material in originalGeo.materials {
-            resolveProperty(material.diffuse, baseURL: textureBaseURL)
-            resolveProperty(material.normal, baseURL: textureBaseURL)
-            resolveProperty(material.roughness, baseURL: textureBaseURL)
-            resolveProperty(material.metalness, baseURL: textureBaseURL)
-            resolveProperty(material.ambientOcclusion, baseURL: textureBaseURL)
-            resolveProperty(material.emission, baseURL: textureBaseURL)
-            resolveProperty(material.transparent, baseURL: textureBaseURL)
-            resolveProperty(material.displacement, baseURL: textureBaseURL)
-            resolveProperty(material.clearCoat, baseURL: textureBaseURL)
-            resolveProperty(material.clearCoatRoughness, baseURL: textureBaseURL)
-            resolveProperty(material.clearCoatNormal, baseURL: textureBaseURL)
-        }
+        // 2. Map Old Indices -> New Indices
+        // -1 means the vertex is deleted.
+        var oldToNewMap = [Int: Int]()
+        var keptIndexCount = 0
         
-        // 4. Extract & Crop Geometry
-        guard let posSource = originalGeo.sources(for: .vertex).first else { return }
-        
-        func getPosition(at index: Int) -> SCNVector3 {
-            let byteOffset = posSource.dataOffset + (index * posSource.dataStride)
-            return posSource.data.withUnsafeBytes { buffer in
-                let x = buffer.load(fromByteOffset: byteOffset, as: Float.self)
-                let y = buffer.load(fromByteOffset: byteOffset + 4, as: Float.self)
-                let z = buffer.load(fromByteOffset: byteOffset + 8, as: Float.self)
-                return SCNVector3(x, y, z)
+        for i in 0..<vertexSource.vectorCount {
+            if indicesToDelete.contains(i) {
+                oldToNewMap[i] = -1
+            } else {
+                oldToNewMap[i] = keptIndexCount
+                keptIndexCount += 1
             }
         }
         
-        guard let element = originalGeo.elements.first else { return }
-        
-        var newIndices: [UInt32] = []
-        var uniqueVertexMap: [Int: Int] = [:]
-        var keptOldIndices: [Int] = []
-        
-        element.data.withUnsafeBytes { buffer in
-            let triangleCount = element.primitiveCount
-            let is32Bit = element.bytesPerIndex == 4
-            
-            for t in 0..<triangleCount {
-                let i = t * 3
-                let idx1, idx2, idx3: Int
-                
-                if is32Bit {
-                    idx1 = Int(buffer.load(fromByteOffset: i * 4, as: UInt32.self))
-                    idx2 = Int(buffer.load(fromByteOffset: (i+1) * 4, as: UInt32.self))
-                    idx3 = Int(buffer.load(fromByteOffset: (i+2) * 4, as: UInt32.self))
-                } else {
-                    idx1 = Int(buffer.load(fromByteOffset: i * 2, as: UInt16.self))
-                    idx2 = Int(buffer.load(fromByteOffset: (i+1) * 2, as: UInt16.self))
-                    idx3 = Int(buffer.load(fromByteOffset: (i+2) * 2, as: UInt16.self))
-                }
-                
-                let v1 = getPosition(at: idx1)
-                let v2 = getPosition(at: idx2)
-                let v3 = getPosition(at: idx3)
-                
-                if isInside(v1, bounds) && isInside(v2, bounds) && isInside(v3, bounds) {
-                    func keep(_ oldIndex: Int) -> UInt32 {
-                        if let newIndex = uniqueVertexMap[oldIndex] { return UInt32(newIndex) }
-                        let newIndex = keptOldIndices.count
-                        uniqueVertexMap[oldIndex] = newIndex
-                        keptOldIndices.append(oldIndex)
-                        return UInt32(newIndex)
-                    }
-                    newIndices.append(keep(idx1))
-                    newIndices.append(keep(idx2))
-                    newIndices.append(keep(idx3))
-                }
-            }
+        if keptIndexCount == 0 {
+            throw NSError(domain: "Geo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Selection would delete the entire mesh."])
         }
         
-        if newIndices.isEmpty {
-             throw NSError(domain: "GeoUtils", code: 3, userInfo: [NSLocalizedDescriptionKey: "Crop removed the entire model."])
-        }
-        
-        // 5. Rebuild Sources
-        let allSources = originalGeo.sources
+        // 3. Rebuild Vertex Sources (Position, Normal, Color, etc.)
         var newSources: [SCNGeometrySource] = []
         
-        for source in allSources {
+        for source in geo.sources {
             let stride = source.dataStride
             let offset = source.dataOffset
             let componentSize = source.bytesPerComponent * source.componentsPerVector
-            let newLength = keptOldIndices.count * stride
-            var newData = Data(count: newLength)
             
-            newData.withUnsafeMutableBytes { destPtr in
-                source.data.withUnsafeBytes { srcPtr in
-                    for (newIdx, oldIdx) in keptOldIndices.enumerated() {
-                        let srcLoc = (oldIdx * stride) + offset
-                        let dstLoc = (newIdx * stride) + offset
-                        if srcLoc + componentSize <= srcPtr.count {
-                            let srcAddress = srcPtr.baseAddress!.advanced(by: srcLoc)
-                            let dstAddress = destPtr.baseAddress!.advanced(by: dstLoc)
-                            dstAddress.copyMemory(from: srcAddress, byteCount: componentSize)
+            var newData = Data(count: keptIndexCount * stride)
+            
+            // Unsafe copy of only the kept vertices
+            source.data.withUnsafeBytes { srcPtr in
+                newData.withUnsafeMutableBytes { dstPtr in
+                    var dstOffset = 0
+                    for i in 0..<vertexSource.vectorCount {
+                        if oldToNewMap[i]! != -1 {
+                            let srcLoc = i * stride + offset
+                            if srcLoc + componentSize <= srcPtr.count {
+                                let srcAddress = srcPtr.baseAddress!.advanced(by: srcLoc)
+                                let dstAddress = dstPtr.baseAddress!.advanced(by: dstOffset + offset)
+                                dstAddress.copyMemory(from: srcAddress, byteCount: componentSize)
+                            }
+                            dstOffset += stride
                         }
                     }
                 }
@@ -154,7 +85,7 @@ class GeometryUtils {
             let newSource = SCNGeometrySource(
                 data: newData,
                 semantic: source.semantic,
-                vectorCount: keptOldIndices.count,
+                vectorCount: keptIndexCount,
                 usesFloatComponents: source.usesFloatComponents,
                 componentsPerVector: source.componentsPerVector,
                 bytesPerComponent: source.bytesPerComponent,
@@ -164,55 +95,58 @@ class GeometryUtils {
             newSources.append(newSource)
         }
         
-        // 6. Create Final Geometry
+        // 4. Rebuild Triangles (Indices)
+        // We only keep triangles where ALL 3 vertices survived.
+        var newIndices: [UInt32] = []
+        
+        element.data.withUnsafeBytes { buffer in
+            let triangleCount = element.primitiveCount
+            let is32Bit = element.bytesPerIndex == 4
+            
+            for t in 0..<triangleCount {
+                let i = t * 3
+                let base = i * element.bytesPerIndex
+                
+                let idx1, idx2, idx3: Int
+                
+                if is32Bit {
+                    idx1 = Int(buffer.load(fromByteOffset: base, as: UInt32.self))
+                    idx2 = Int(buffer.load(fromByteOffset: base + 4, as: UInt32.self))
+                    idx3 = Int(buffer.load(fromByteOffset: base + 8, as: UInt32.self))
+                } else {
+                    idx1 = Int(buffer.load(fromByteOffset: base, as: UInt16.self))
+                    idx2 = Int(buffer.load(fromByteOffset: base + 2, as: UInt16.self))
+                    idx3 = Int(buffer.load(fromByteOffset: base + 4, as: UInt16.self))
+                }
+                
+                // If all 3 vertices map to valid new indices, keep the triangle
+                if let n1 = oldToNewMap[idx1], n1 != -1,
+                   let n2 = oldToNewMap[idx2], n2 != -1,
+                   let n3 = oldToNewMap[idx3], n3 != -1 {
+                    newIndices.append(UInt32(n1))
+                    newIndices.append(UInt32(n2))
+                    newIndices.append(UInt32(n3))
+                }
+            }
+        }
+        
         let newElement = SCNGeometryElement(indices: newIndices, primitiveType: .triangles)
         let newGeo = SCNGeometry(sources: newSources, elements: [newElement])
-        newGeo.materials = originalGeo.materials // Use the materials we resolved earlier
         
-        // 7. BUILD A FRESH SCENE (The Fix)
-        // We create a brand new SCNScene to break any link to the old broken USD layers.
-        let outputScene = SCNScene()
-        let outputNode = SCNNode(geometry: newGeo)
-        outputNode.name = "CroppedModel"
-        outputScene.rootNode.addChildNode(outputNode)
+        // Preserve Materials
+        newGeo.materials = geo.materials
         
-        // 8. EXPORT
+        // 5. Export New File
+        let outScene = SCNScene()
+        let outNode = SCNNode(geometry: newGeo)
+        outNode.name = "CleanedModel"
+        outScene.rootNode.addChildNode(outNode)
+        
         if format == .usdz {
-            // Write the FRESH scene. SceneKit will see the absolute paths in materials and bundle them.
-            let success = outputScene.write(to: destinationURL, options: nil, delegate: nil, progressHandler: nil)
-            if !success {
-                throw NSError(domain: "GeoUtils", code: 4, userInfo: [NSLocalizedDescriptionKey: "SceneKit failed to write USDZ."])
-            }
+            outScene.write(to: destinationURL, options: nil, delegate: nil, progressHandler: nil)
         } else {
-            let asset = MDLAsset(scnScene: outputScene)
-            if asset.count == 0 {
-                throw NSError(domain: "GeoUtils", code: 5, userInfo: [NSLocalizedDescriptionKey: "ModelIO failed to process scene."])
-            }
+            let asset = MDLAsset(scnScene: outScene)
             try asset.export(to: destinationURL)
         }
-    }
-    
-    // Helper to force paths to be absolute
-    private static func resolveProperty(_ property: SCNMaterialProperty, baseURL: URL) {
-        if let path = property.contents as? String {
-            let fullURL = baseURL.appendingPathComponent(path)
-            if FileManager.default.fileExists(atPath: fullURL.path) {
-                property.contents = fullURL
-            }
-        } else if let url = property.contents as? URL {
-             // If URL is relative or weird, try to fix it
-             if !FileManager.default.fileExists(atPath: url.path) {
-                 let fixedURL = baseURL.appendingPathComponent(url.lastPathComponent)
-                 if FileManager.default.fileExists(atPath: fixedURL.path) {
-                     property.contents = fixedURL
-                 }
-             }
-        }
-    }
-    
-    private static func isInside(_ v: SCNVector3, _ b: CropBounds) -> Bool {
-        return v.x >= b.min.x && v.x <= b.max.x &&
-               v.y >= b.min.y && v.y <= b.max.y &&
-               v.z >= b.min.z && v.z <= b.max.z
     }
 }

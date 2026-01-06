@@ -1,137 +1,99 @@
 import SwiftUI
 import SceneKit
 
-// Params struct to pass data easily
+// Params struct
 struct SmileTemplateParams {
-    var posX: Float
-    var posY: Float
-    var posZ: Float
-    var scale: Float
-    var curve: Float
-    var length: Float
-    var ratio: Float
+    var posX: Float; var posY: Float; var posZ: Float
+    var scale: Float; var curve: Float; var length: Float; var ratio: Float
 }
 
 struct DesignSceneWrapper: NSViewRepresentable {
     let scanURL: URL
-    
-    // Crop Mode
     let isCleanupMode: Bool
-    let cropBox: (min: SCNVector3, max: SCNVector3)
+    @Binding var triggerDelete: Bool
+    var onDelete: ((Set<Int>) -> Void)?
     
-    // Smile Design Mode
-    var showSmileTemplate: Bool = false
-    var smileParams: SmileTemplateParams = SmileTemplateParams(posX: 0, posY: 0, posZ: 0, scale: 1, curve: 0, length: 1, ratio: 0.8)
-    var showGrid: Bool = false
+    var showSmileTemplate: Bool
+    var smileParams: SmileTemplateParams
+    var showGrid: Bool
     
-    // Callbacks
     var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)?
     
-    func makeNSView(context: Context) -> SCNView {
-        let view = SCNView()
+    func makeNSView(context: Context) -> EditorView {
+        let view = EditorView()
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
-        view.backgroundColor = NSColor.black
+        view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
         view.scene = SCNScene()
         return view
     }
     
-    func updateNSView(_ uiView: SCNView, context: Context) {
-        guard let root = uiView.scene?.rootNode else { return }
-        let patientNodeName = "PATIENT_MODEL"
+    func updateNSView(_ view: EditorView, context: Context) {
+        // 1. Mode Sync
+        view.allowsCameraControl = !isCleanupMode
+        view.isPaintMode = isCleanupMode
         
-        // 1. Load Model (Lazy Load)
-        if root.childNode(withName: patientNodeName, recursively: false) == nil {
-            if let node = try? SCNScene(url: scanURL, options: nil).rootNode.childNodes.first {
-                node.name = patientNodeName
+        // 2. Handle Deletion
+        if triggerDelete {
+            let indices = view.selectedIndices
+            if !indices.isEmpty {
+                onDelete?(indices)
+                view.clearSelection()
+            }
+            DispatchQueue.main.async { triggerDelete = false }
+        }
+        
+        guard let root = view.scene?.rootNode else { return }
+        
+        // 3. Load Model (Robust Finder)
+        if root.childNodes.isEmpty {
+            if let scene = try? SCNScene(url: scanURL, options: nil),
+               let geoNode = findFirstGeometryNode(in: scene.rootNode) {
                 
-                // Center Pivot
+                // Clone node to detach from original file structure
+                let node = geoNode.clone()
+                node.name = "PATIENT_MODEL"
+                
+                // Normalize Position (Center at 0,0,0)
                 let (min, max) = node.boundingBox
                 node.pivot = SCNMatrix4MakeTranslation((min.x+max.x)/2, (min.y+max.y)/2, (min.z+max.z)/2)
                 node.position = SCNVector3Zero
-                node.geometry?.firstMaterial?.isDoubleSided = true
+                
+                // Setup Material (Vertex Color Friendly)
+                let mat = SCNMaterial()
+                mat.diffuse.contents = NSColor.white
+                mat.lightingModel = .physicallyBased
+                mat.isDoubleSided = true
+                node.geometry?.materials = [mat]
                 
                 root.addChildNode(node)
                 
+                // Init Paint
+                view.prepareForPainting(node: node)
+                
                 DispatchQueue.main.async {
-                    // Send bounds back to UI to auto-set slider ranges
-                    let w = CGFloat(max.x - min.x); let h = CGFloat(max.y - min.y); let d = CGFloat(max.z - min.z)
-                    let pad = w * 0.1
-                    self.onModelLoaded?((
-                        min: SCNVector3(-w/2 - pad, -h/2 - pad, -d/2 - pad),
-                        max: SCNVector3(w/2 + pad, h/2 + pad, d/2 + pad)
-                    ))
-                    uiView.defaultCameraController.frameNodes([node])
+                    self.onModelLoaded?((min: min, max: max))
+                    view.defaultCameraController.frameNodes([node])
                 }
             }
         }
         
-        // 2. Handle Crop Tool
-        updateCropTool(root: root)
-        
-        // 3. Handle Smile Template
-        updateSmileTemplate(root: root)
-        
-        // 4. Handle Grid
+        // 4. Update Features
+        updateSmileTemplate(root: root, patientNode: root.childNode(withName: "PATIENT_MODEL", recursively: true))
         updateGrid(root: root)
     }
     
-    // MARK: - Crop Logic
-    
-    private func updateCropTool(root: SCNNode) {
-        let patientNode = root.childNode(withName: "PATIENT_MODEL", recursively: false)
-        let boxName = "CROP_BOX"
-        
-        if isCleanupMode {
-            // Apply Shader
-            let shader = """
-            #pragma transparent
-            #pragma body
-            float3 p = _surface.position;
-            if (p.x < custom_minX || p.x > custom_maxX ||
-                p.y < custom_minY || p.y > custom_maxY ||
-                p.z < custom_minZ || p.z > custom_maxZ) {
-                discard_fragment();
-            }
-            """
-            if patientNode?.geometry?.shaderModifiers == nil {
-                patientNode?.geometry?.shaderModifiers = [.surface: shader]
-            }
-            
-            if let mat = patientNode?.geometry?.firstMaterial {
-                // SCNVector3 components are CGFloat on macOS, convert to Float for Shader
-                mat.setValue(Float(cropBox.min.x), forKey: "custom_minX"); mat.setValue(Float(cropBox.max.x), forKey: "custom_maxX")
-                mat.setValue(Float(cropBox.min.y), forKey: "custom_minY"); mat.setValue(Float(cropBox.max.y), forKey: "custom_maxY")
-                mat.setValue(Float(cropBox.min.z), forKey: "custom_minZ"); mat.setValue(Float(cropBox.max.z), forKey: "custom_maxZ")
-            }
-            
-            // Draw Box
-            var boxNode = root.childNode(withName: boxName, recursively: false)
-            if boxNode == nil {
-                let box = SCNBox(width: 1, height: 1, length: 1, chamferRadius: 0)
-                box.firstMaterial?.diffuse.contents = NSColor.yellow
-                box.firstMaterial?.fillMode = .lines
-                let node = SCNNode(geometry: box)
-                node.name = boxName
-                root.addChildNode(node)
-                boxNode = node
-            }
-            
-            let w = CGFloat(cropBox.max.x - cropBox.min.x)
-            let h = CGFloat(cropBox.max.y - cropBox.min.y)
-            let l = CGFloat(cropBox.max.z - cropBox.min.z)
-            if let geo = boxNode?.geometry as? SCNBox { geo.width = w; geo.height = h; geo.length = l }
-            boxNode?.position = SCNVector3((cropBox.min.x + cropBox.max.x)/2, (cropBox.min.y + cropBox.max.y)/2, (cropBox.min.z + cropBox.max.z)/2)
-            
-        } else {
-            patientNode?.geometry?.shaderModifiers = nil
-            root.childNode(withName: boxName, recursively: false)?.removeFromParentNode()
+    // Helper to find deep geometry
+    private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
+        if node.geometry != nil { return node }
+        for child in node.childNodes {
+            if let found = findFirstGeometryNode(in: child) { return found }
         }
+        return nil
     }
     
-    // MARK: - Smile Template Logic
-    
-    private func updateSmileTemplate(root: SCNNode) {
+    // MARK: - Smile Template Logic (Same as before)
+    private func updateSmileTemplate(root: SCNNode, patientNode: SCNNode?) {
         let name = "SMILE_TEMPLATE"
         var templateNode = root.childNode(withName: name, recursively: false)
         
@@ -142,28 +104,30 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 root.addChildNode(templateNode!)
             }
             
-            // Apply User Params (Cast Float -> CGFloat for macOS)
-            // 1. Position
-            templateNode?.position = SCNVector3(CGFloat(smileParams.posX), CGFloat(smileParams.posY), CGFloat(smileParams.posZ))
-            
-            // 2. Global Scale (Arch Width)
-            let s = CGFloat(smileParams.scale)
-            templateNode?.scale = SCNVector3(s, s, s)
-            
-            // 3. Morph Shape (Curve & Length)
-            templateNode?.childNodes.forEach { tooth in
-                // Adjust geometry scale for length/ratio
-                // Scale Y = Length, Scale X = Ratio (Width)
-                tooth.scale = SCNVector3(CGFloat(smileParams.ratio), CGFloat(smileParams.length), 1.0)
-                
-                // Adjust Arch Curve
-                // Parabolic curve: Z = x^2 * curveFactor
-                // We use the tooth's initial X position to calculate Z offset
-                let xVal = Float(tooth.position.x)
-                let zOffset = pow(xVal * 5.0, 2) * smileParams.curve * 0.1
-                tooth.position.z = CGFloat(zOffset)
+            // Auto-Scale
+            var unitScale: CGFloat = 1.0
+            if let pNode = patientNode {
+                let (min, max) = pNode.boundingBox
+                let width = max.x - min.x
+                if width > 10 { unitScale = 1000.0 }
             }
             
+            let moveScale = unitScale * 0.5
+            templateNode?.position = SCNVector3(
+                CGFloat(smileParams.posX) * moveScale,
+                CGFloat(smileParams.posY) * moveScale,
+                CGFloat(smileParams.posZ) * moveScale
+            )
+            
+            let s = CGFloat(smileParams.scale) * unitScale
+            templateNode?.scale = SCNVector3(s, s, s)
+            
+            templateNode?.childNodes.forEach { tooth in
+                tooth.scale = SCNVector3(CGFloat(smileParams.ratio), CGFloat(smileParams.length), 1.0)
+                let xVal = Float(tooth.position.x)
+                let zOffset = pow(xVal * 5.0, 2) * smileParams.curve * 0.5
+                tooth.position.z = CGFloat(zOffset)
+            }
         } else {
             templateNode?.removeFromParentNode()
         }
@@ -171,105 +135,151 @@ struct DesignSceneWrapper: NSViewRepresentable {
     
     private func createProceduralArch() -> SCNNode {
         let root = SCNNode()
-        
-        // Standard width reference in meters
-        let baseW: Float = 0.0085 // 8.5mm central width
-        
-        // 6 Anterior teeth (3 Left, 3 Right)
-        let definitions: [(id: Int, wRatio: Float, hRatio: Float)] = [
-            (1, 1.0, 1.0),    // Central
-            (2, 0.75, 0.85),  // Lateral
-            (3, 0.85, 0.95)   // Canine
+        let baseW: CGFloat = 0.0085
+        let definitions: [(id: Int, wRatio: CGFloat, hRatio: CGFloat)] = [
+            (1, 1.0, 1.0), (2, 0.75, 0.85), (3, 0.85, 0.95)
         ]
-        
-        var xCursor: Float = baseW / 2.0 // Start half a tooth width from center
-        
+        var xCursor: CGFloat = baseW / 2.0
         for def in definitions {
-            let w = baseW * def.wRatio
-            let h = baseW * 1.2 * def.hRatio
-            
-            // Create Right Tooth (+)
-            let rNode = createToothGeo(width: CGFloat(w), height: CGFloat(h))
-            rNode.position = SCNVector3(CGFloat(xCursor), 0, 0)
-            rNode.name = "T_\(def.id)_R"
+            let w = baseW * def.wRatio; let h = baseW * 1.2 * def.hRatio
+            let rNode = createToothGeo(width: w, height: h)
+            rNode.position = SCNVector3(xCursor, 0, 0)
             root.addChildNode(rNode)
-            
-            // Create Left Tooth (-)
-            let lNode = createToothGeo(width: CGFloat(w), height: CGFloat(h))
-            lNode.position = SCNVector3(CGFloat(-xCursor), 0, 0)
-            lNode.name = "T_\(def.id)_L"
+            let lNode = createToothGeo(width: w, height: h)
+            lNode.position = SCNVector3(-xCursor, 0, 0)
             root.addChildNode(lNode)
-            
-            xCursor += w // Move cursor
+            xCursor += w
         }
-        
         return root
     }
     
     private func createToothGeo(width: CGFloat, height: CGFloat) -> SCNNode {
-        // macOS: Use NSBezierPath instead of UIBezierPath
-        let rect = CGRect(x: -width/2, y: -height/2, width: width, height: height)
-        let path = NSBezierPath(roundedRect: rect, xRadius: width * 0.3, yRadius: width * 0.3)
-        
-        let shape = SCNShape(path: path, extrusionDepth: 0.002) // 2mm thick
-        shape.chamferRadius = width * 0.05
-        
-        let mat = SCNMaterial()
-        mat.diffuse.contents = NSColor(white: 1.0, alpha: 0.8)
-        mat.lightingModel = .physicallyBased
-        mat.metalness.contents = 0.1
-        mat.roughness.contents = 0.3
-        shape.materials = [mat]
-        
+        let path = NSBezierPath(roundedRect: CGRect(x: -width/2, y: -height/2, width: width, height: height), xRadius: width*0.3, yRadius: width*0.3)
+        let shape = SCNShape(path: path, extrusionDepth: width*0.2); shape.chamferRadius = width*0.05
+        let mat = SCNMaterial(); mat.diffuse.contents = NSColor(white: 1.0, alpha: 0.7)
         return SCNNode(geometry: shape)
     }
     
     // MARK: - Grid Logic
-    
     private func updateGrid(root: SCNNode) {
         let name = "GOLDEN_GRID"
         var gridNode = root.childNode(withName: name, recursively: false)
-        
         if showGrid {
             if gridNode == nil {
-                // Golden Ratio Lines
                 let grid = SCNNode()
                 let mat = SCNMaterial(); mat.diffuse.contents = NSColor.cyan
-                
-                let lineH = SCNPlane(width: 0.0005, height: 0.1)
-                lineH.materials = [mat]
-                
-                let cW: CGFloat = 0.0085
-                let lW = cW * 0.618
-                
-                let offsets: [CGFloat] = [0, cW, cW + lW]
-                
+                let lineH = SCNPlane(width: 0.0005, height: 0.1); lineH.materials = [mat]
+                let cW: CGFloat = 0.0085; let lW = cW * 0.618; let offsets = [0, cW, cW + lW]
                 for x in offsets {
-                    let rL = SCNNode(geometry: lineH); rL.position.x = x
-                    let lL = SCNNode(geometry: lineH); lL.position.x = -x
-                    grid.addChildNode(rL)
-                    grid.addChildNode(lL)
+                    let rL = SCNNode(geometry: lineH); rL.position.x = x; grid.addChildNode(rL)
+                    let lL = SCNNode(geometry: lineH); lL.position.x = -x; grid.addChildNode(lL)
                 }
-                
-                let lineW = SCNPlane(width: 0.1, height: 0.0005)
-                lineW.materials = [mat]
-                let hNode = SCNNode(geometry: lineW)
-                hNode.position.y = -cW/2
-                grid.addChildNode(hNode)
-                
-                grid.name = name
-                root.addChildNode(grid)
-                gridNode = grid
+                let lineW = SCNPlane(width: 0.1, height: 0.0005); lineW.materials = [mat]
+                let hNode = SCNNode(geometry: lineW); hNode.position.y = -cW/2; grid.addChildNode(hNode)
+                grid.name = name; root.addChildNode(grid); gridNode = grid
             }
-            
-            // Cast params to CGFloat for macOS
-            gridNode?.position = SCNVector3(
-                CGFloat(smileParams.posX),
-                CGFloat(smileParams.posY),
-                CGFloat(smileParams.posZ) + 0.005
-            )
+            gridNode?.position = SCNVector3(CGFloat(smileParams.posX), CGFloat(smileParams.posY), CGFloat(smileParams.posZ) + 0.005)
         } else {
             gridNode?.removeFromParentNode()
         }
+    }
+}
+
+// MARK: - Custom Editor View
+
+class EditorView: SCNView {
+    var isPaintMode: Bool = false
+    private var geometryNode: SCNNode?
+    
+    // 32-bit Float Color Struct (Critical for SceneKit on macOS)
+    struct FloatColor { var r, g, b, a: Float }
+    private var vertexColors: [FloatColor] = []
+    public var selectedIndices: Set<Int> = []
+    
+    func prepareForPainting(node: SCNNode) {
+        self.geometryNode = node
+        guard let geo = node.geometry, let src = geo.sources(for: .vertex).first else { return }
+        
+        // Initialize White
+        self.vertexColors = Array(repeating: FloatColor(r: 1, g: 1, b: 1, a: 1), count: src.vectorCount)
+        updateColorGeometry()
+    }
+    
+    func clearSelection() {
+        selectedIndices.removeAll()
+        vertexColors = vertexColors.map { _ in FloatColor(r: 1, g: 1, b: 1, a: 1) }
+        updateColorGeometry()
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        if isPaintMode { paint(event: event) } else { super.mouseDown(with: event) }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if isPaintMode { paint(event: event) } else { super.mouseDragged(with: event) }
+    }
+    
+    private func paint(event: NSEvent) {
+        guard let node = geometryNode, let geo = node.geometry else { return }
+        
+        let loc = self.convert(event.locationInWindow, from: nil)
+        let results = self.hitTest(loc, options: [.rootNode: node, .searchMode: SCNHitTestSearchMode.closest.rawValue])
+        guard let hit = results.first else { return }
+        
+        let localPoint = hit.localCoordinates
+        
+        // Dynamic Brush Size
+        let bounds = node.boundingBox
+        let scale = CGFloat(bounds.max.x - bounds.min.x)
+        let r = max(scale * 0.03, 0.002) // 3% of model width
+        let rSq = r*r
+        
+        guard let vertexSource = geo.sources(for: .vertex).first else { return }
+        
+        vertexSource.data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            let floatBuffer = buffer.bindMemory(to: Float.self)
+            let stride = vertexSource.dataStride / 4
+            let offset = vertexSource.dataOffset / 4
+            var changed = false
+            
+            for i in 0..<vertexSource.vectorCount {
+                if selectedIndices.contains(i) { continue }
+                
+                let x = CGFloat(floatBuffer[i * stride + offset])
+                let y = CGFloat(floatBuffer[i * stride + offset + 1])
+                let z = CGFloat(floatBuffer[i * stride + offset + 2])
+                
+                let dx = x - localPoint.x
+                let dy = y - localPoint.y
+                let dz = z - localPoint.z
+                
+                if (dx*dx + dy*dy + dz*dz) < rSq {
+                    selectedIndices.insert(i)
+                    vertexColors[i] = FloatColor(r: 1, g: 0, b: 0, a: 1) // RED
+                    changed = true
+                }
+            }
+            if changed { updateColorGeometry() }
+        }
+    }
+    
+    private func updateColorGeometry() {
+        guard let node = geometryNode, let geo = node.geometry else { return }
+        
+        let data = Data(bytes: vertexColors, count: vertexColors.count * MemoryLayout<FloatColor>.size)
+        let colorSource = SCNGeometrySource(
+            data: data,
+            semantic: .color,
+            vectorCount: vertexColors.count,
+            usesFloatComponents: true,
+            componentsPerVector: 4,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<FloatColor>.size
+        )
+        
+        let otherSources = geo.sources.filter { $0.semantic != .color }
+        let newGeo = SCNGeometry(sources: otherSources + [colorSource], elements: geo.elements)
+        newGeo.materials = geo.materials
+        node.geometry = newGeo
     }
 }
