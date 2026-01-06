@@ -20,15 +20,8 @@ class ProcessingViewModel: ObservableObject {
         case completed(url: URL)
         case failed(error: String)
         
-        var isProcessing: Bool {
-            if case .processing = self { return true }
-            return false
-        }
-        
-        var hasModel: Bool {
-            if case .completed = self { return true }
-            return false
-        }
+        var isProcessing: Bool { if case .processing = self { return true }; return false }
+        var hasModel: Bool { if case .completed = self { return true }; return false }
     }
     
     @Published var state: State = .idle
@@ -38,60 +31,44 @@ class ProcessingViewModel: ObservableObject {
     var currentModelURL: URL?
     private var startTime: Date?
     
-    // MARK: - Cleanup Logic
-    
     func resetAndCleanup() {
-        if let url = currentModelURL {
-            try? FileManager.default.removeItem(at: url)
-            self.log("🗑️ Previous model deleted.")
-        }
-        self.currentModelURL = nil
-        self.state = .idle
-        self.consoleLog = "Ready for new scan."
+        if let url = currentModelURL { try? FileManager.default.removeItem(at: url); self.log("🗑️ Previous model deleted.") }
+        self.currentModelURL = nil; self.state = .idle; self.consoleLog = "Ready for new scan."
     }
-    
-    // MARK: - Ingestion & Smart Processing
     
     func ingest(url: URL) {
         let access = url.startAccessingSecurityScopedResource()
-        
         Task {
             defer { if access { url.stopAccessingSecurityScopedResource() } }
-            
             do {
                 var inputRoot = url
                 
-                // 1. Unzip if needed
+                // FIX: Priority Inversion & Actor Isolation
                 if ["zip", "ar"].contains(url.pathExtension.lowercased()) {
                     self.log("📦 Decompressing Archive...")
-                    inputRoot = try await Task.detached { try ZipUtilities.unzip(fileURL: url) }.value
+                    // Explicitly run with higher priority to avoid blocking UI thread waiting on default priority
+                    inputRoot = try await Task.detached(priority: .userInitiated) {
+                        try ZipUtilities.unzip(fileURL: url)
+                    }.value
                 }
                 
-                // 2. Find Images
                 guard let dataFolder = ZipUtilities.findImageSource(in: inputRoot) else {
                     throw NSError(domain: "App", code: 404, userInfo: [NSLocalizedDescriptionKey: "No valid images found."])
                 }
                 
-                // 3. SMART CROP (The AI Step)
                 self.log("✂️ AI Analysis: Cropping to Face...")
                 let croppedFolder = try await performSmartCrop(in: dataFolder, margin: 0.5)
                 
-                // 4. Count Valid Images
                 let validExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
                 let files = try FileManager.default.contentsOfDirectory(at: croppedFolder, includingPropertiesForKeys: nil)
                 let imageCount = files.filter { validExtensions.contains($0.pathExtension.lowercased()) }.count
-                
                 self.log("📸 Found \(imageCount) valid face images.")
                 
                 guard imageCount >= 10 else {
                     throw NSError(domain: "App", code: 400, userInfo: [NSLocalizedDescriptionKey: "Need at least 10 images with detected faces."])
                 }
                 
-                // 5. Run Photogrammetry
                 await runPhotogrammetry(inputFolder: croppedFolder, imageCount: imageCount)
-                
-                // 6. AUTO-CLEANUP (New Step)
-                // Delete the temp folder containing cropped images to free up space
                 try? FileManager.default.removeItem(at: croppedFolder)
                 self.log("🧹 Cleaned up temporary files.")
                 
@@ -102,8 +79,6 @@ class ProcessingViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Smart Cropping Logic (Non-Isolated)
-    
     nonisolated private func performSmartCrop(in inputURL: URL, margin: CGFloat) async throws -> URL {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent("SmartCrop_\(UUID().uuidString)")
@@ -111,69 +86,45 @@ class ProcessingViewModel: ObservableObject {
         
         let fileURLs = try fileManager.contentsOfDirectory(at: inputURL, includingPropertiesForKeys: nil)
         let imageExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
-        
         let context = CIContext(options: [.cacheIntermediates: false])
         
         for fileURL in fileURLs {
             if Task.isCancelled { break }
             guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
-            
             guard let ciImage = CIImage(contentsOf: fileURL) else { continue }
             
             let request = VNDetectFaceRectanglesRequest()
             let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
-            
             do {
                 try handler.perform([request])
-                guard let face = request.results?.sorted(by: { $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height }).first else {
-                    continue
-                }
+                guard let face = request.results?.sorted(by: { $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height }).first else { continue }
                 
-                let w = CGFloat(ciImage.extent.width)
-                let h = CGFloat(ciImage.extent.height)
+                let w = CGFloat(ciImage.extent.width); let h = CGFloat(ciImage.extent.height)
                 let bbox = face.boundingBox
-                
-                let rect = CGRect(
-                    x: bbox.origin.x * w,
-                    y: bbox.origin.y * h,
-                    width: bbox.width * w,
-                    height: bbox.height * h
-                )
-                
-                let insetX = -(rect.width * margin) / 2
-                let insetY = -(rect.height * margin) / 2
+                let rect = CGRect(x: bbox.origin.x * w, y: bbox.origin.y * h, width: bbox.width * w, height: bbox.height * h)
+                let insetX = -(rect.width * margin) / 2; let insetY = -(rect.height * margin) / 2
                 let cropRect = rect.insetBy(dx: insetX, dy: insetY).intersection(ciImage.extent)
-                
                 let croppedImage = ciImage.cropped(to: cropRect)
                 let destURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
                 
                 if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
                     try context.writeHEIFRepresentation(of: croppedImage, to: destURL, format: .RGBA8, colorSpace: colorSpace)
                 }
-            } catch {
-                print("Skipping \(fileURL.lastPathComponent)")
-            }
+            } catch { print("Skipping \(fileURL.lastPathComponent)") }
         }
-        
         return tempDir
     }
-    
-    // MARK: - Photogrammetry
     
     private func runPhotogrammetry(inputFolder: URL, imageCount: Int) async {
         self.startTime = Date()
         self.log("🚀 Starting Reconstruction...")
-        
         let tempDir = FileManager.default.temporaryDirectory
         let uniqueID = UUID().uuidString
         let filename = "DentalScan_\(uniqueID).usdz"
         let outputURL = tempDir.appendingPathComponent(filename)
         
         do {
-            guard PhotogrammetrySession.isSupported else {
-                throw NSError(domain: "App", code: 500, userInfo: [NSLocalizedDescriptionKey: "Hardware not supported."])
-            }
-            
+            guard PhotogrammetrySession.isSupported else { throw NSError(domain: "App", code: 500, userInfo: [NSLocalizedDescriptionKey: "Hardware not supported."]) }
             var config = PhotogrammetrySession.Configuration()
             config.featureSensitivity = .high
             config.sampleOrdering = .unordered
@@ -181,7 +132,6 @@ class ProcessingViewModel: ObservableObject {
             
             let session = try PhotogrammetrySession(input: inputFolder, configuration: config)
             let request = PhotogrammetrySession.Request.modelFile(url: outputURL, detail: selectedDetailLevel)
-            
             try session.process(requests: [request])
             
             for try await output in session.outputs {
@@ -190,11 +140,8 @@ class ProcessingViewModel: ObservableObject {
                     await MainActor.run {
                         let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
                         self.state = .processing(progress: fraction, timeElapsed: elapsed)
-                        if Int(fraction * 100) % 10 == 0 {
-                            self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
-                        }
+                        if Int(fraction * 100) % 10 == 0 { self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s" }
                     }
-                    
                 case .requestComplete(_, _):
                     await MainActor.run {
                         let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
@@ -202,53 +149,34 @@ class ProcessingViewModel: ObservableObject {
                         self.currentModelURL = outputURL
                         self.state = .completed(url: outputURL)
                     }
-                    
-                case .requestError(_, let error):
-                    self.log("⚠️ Warning: \(error.localizedDescription)")
-                    
+                case .requestError(_, let error): self.log("⚠️ Warning: \(error.localizedDescription)")
                 default: break
                 }
             }
         } catch {
-            await MainActor.run {
-                self.state = .failed(error: error.localizedDescription)
-                self.log("❌ Failed: \(error.localizedDescription)")
-            }
+            await MainActor.run { self.state = .failed(error: error.localizedDescription); self.log("❌ Failed: \(error.localizedDescription)") }
         }
     }
     
     func exportSTL(to destinationURL: URL) {
         guard let sourceURL = currentModelURL else { return }
         self.log("⚙️ Converting to STL...")
-        
         Task.detached {
             do {
                 let asset = MDLAsset(url: sourceURL)
                 guard asset.count > 0 else { throw NSError(domain: "Ex", code: 0, userInfo: nil) }
-                
                 let scaleFactor: Float = 1000.0
                 let scaleMatrix = matrix_float4x4(diagonal: SIMD4<Float>(scaleFactor, scaleFactor, scaleFactor, 1))
-                
                 for index in 0..<asset.count {
                     let object = asset.object(at: index)
-                    if let transform = object.transform {
-                        transform.matrix = scaleMatrix
-                    } else {
-                        let component = MDLTransform(matrix: scaleMatrix)
-                        object.transform = component
-                    }
+                    if let transform = object.transform { transform.matrix = scaleMatrix }
+                    else { let component = MDLTransform(matrix: scaleMatrix); object.transform = component }
                 }
-                
                 try asset.export(to: destinationURL)
                 await MainActor.run { self.log("✅ Exported: \(destinationURL.lastPathComponent)") }
-            } catch {
-                await MainActor.run { self.log("❌ Export Failed: \(error.localizedDescription)") }
-            }
+            } catch { await MainActor.run { self.log("❌ Export Failed: \(error.localizedDescription)") } }
         }
     }
     
-    private func log(_ msg: String) {
-        print(msg)
-        consoleLog = msg
-    }
+    private func log(_ msg: String) { print(msg); consoleLog = msg }
 }
