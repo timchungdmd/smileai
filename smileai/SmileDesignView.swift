@@ -58,6 +58,7 @@ struct SmileDesignView: View {
     
     // Interaction
     @State private var isPlacingLandmarks: Bool = false
+    @State private var landmarksLocked: Bool = false // NEW: Lock State
     
     // Guided workflow
     var nextLandmark: LandmarkType? {
@@ -68,7 +69,6 @@ struct SmileDesignView: View {
             .upperLipCenter, .lowerLipCenter,
             .midline, .rightCanine, .leftCanine
         ]
-        // If photo exists, prioritize 2D landmarks, otherwise 3D
         if facePhoto != nil {
             return sequence.first(where: { landmarks2D[$0] == nil })
         } else {
@@ -101,10 +101,8 @@ struct SmileDesignView: View {
                 HStack {
                     Text("Smile Studio").font(.title2).fontWeight(.bold)
                     Spacer()
-                    // Import 3D
                     Button(action: { isImporting3D = true }) { Image(systemName: "cube") }
                         .buttonStyle(.plain).font(.title2).help("Import 3D Model")
-                    // Import 2D Photo
                     Button(action: { isImportingPhoto = true }) { Image(systemName: "photo") }
                         .buttonStyle(.plain).font(.title2).padding(.leading, 8).help("Import Face Photo")
                     
@@ -131,24 +129,48 @@ struct SmileDesignView: View {
                     case .analysis:
                         VStack(alignment: .leading, spacing: 15) {
                             Label("Esthetic Analysis", systemImage: "scope").font(.headline)
-                            Toggle(isOn: $isPlacingLandmarks) {
-                                Label(isPlacingLandmarks ? "Placing Points" : "View/Rotate", systemImage: isPlacingLandmarks ? "target" : "hand.draw")
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(isPlacingLandmarks ? .red : .primary)
-                            }.toggleStyle(.button).controlSize(.large).frame(maxWidth: .infinity)
+                            
+                            // Interaction Toggles
+                            HStack {
+                                Toggle(isOn: $isPlacingLandmarks) {
+                                    Label("Place", systemImage: "target")
+                                }
+                                .toggleStyle(.button)
+                                .disabled(landmarksLocked) // Disable placement if locked
+                                
+                                Toggle(isOn: $landmarksLocked) {
+                                    Label(landmarksLocked ? "Locked" : "Unlocked", systemImage: landmarksLocked ? "lock.fill" : "lock.open.fill")
+                                }
+                                .toggleStyle(.button)
+                                .tint(landmarksLocked ? .orange : .green)
+                            }
+                            .controlSize(.large)
+                            .frame(maxWidth: .infinity)
+                            
+                            if landmarksLocked {
+                                Text("Unlock to move or add points.").font(.caption2).foregroundStyle(.secondary)
+                            } else if isPlacingLandmarks {
+                                Text("Click to place next point. Drag to move existing.").font(.caption2).foregroundStyle(.blue)
+                            } else {
+                                Text("View mode. Unlock & toggle 'Place' to edit.").font(.caption2).foregroundStyle(.secondary)
+                            }
                             
                             Divider()
                             
                             if let target = nextLandmark {
                                 Text("Next Landmark:").font(.caption).foregroundStyle(.secondary)
-                                Text(target.rawValue).font(.title3).fontWeight(.bold).foregroundStyle(.blue).padding(.vertical, 5).opacity(isPlacingLandmarks ? 1.0 : 0.5)
+                                Text(target.rawValue).font(.title3).fontWeight(.bold).foregroundStyle(.blue).padding(.vertical, 5).opacity(isPlacingLandmarks && !landmarksLocked ? 1.0 : 0.5)
                             } else {
                                 Text("✅ Analysis Complete").font(.headline).foregroundStyle(.green)
                                 Button("Start Design") { currentMode = .design; templateVisible = true; isPlacingLandmarks = false }.buttonStyle(.borderedProminent)
                             }
                             
                             Divider()
-                            Button("Reset All Landmarks") { landmarks3D.removeAll(); landmarks2D.removeAll() }.buttonStyle(.bordered).controlSize(.small)
+                            Button("Reset All Landmarks") {
+                                landmarks3D.removeAll()
+                                landmarks2D.removeAll()
+                                landmarksLocked = false // Unlock on reset
+                            }.buttonStyle(.bordered).controlSize(.small)
                         }
                     case .design:
                         DesignToolsView(templateVisible: $templateVisible, showGoldenRatio: $showGoldenRatio, selectedToothName: $selectedToothName, toothStates: $toothStates, archPosX: $archPosX, archPosY: $archPosY, archPosZ: $archPosZ, archWidth: $archWidth, archCurve: $archCurve, toothLength: $toothLength, toothRatio: $toothRatio)
@@ -170,6 +192,7 @@ struct SmileDesignView: View {
                             image: image,
                             landmarks: $landmarks2D,
                             isPlacing: isPlacingLandmarks,
+                            isLocked: landmarksLocked, // Pass lock state
                             activeType: nextLandmark
                         )
                         .frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
@@ -188,7 +211,7 @@ struct SmileDesignView: View {
                             onToothTransformChange: { toothStates[$0] = $1 },
                             landmarks: landmarks3D,
                             activeLandmarkType: nextLandmark,
-                            isPlacingLandmarks: (isPlacingLandmarks && facePhoto == nil), // Only allow 3D click if no photo (or distinct toggle?) Let's prefer 2D if present
+                            isPlacingLandmarks: (isPlacingLandmarks && facePhoto == nil && !landmarksLocked), // Only allow 3D click if no photo & unlocked
                             onLandmarkPicked: { pos in if let t = nextLandmark { landmarks3D[t] = pos } },
                             showGrid: (currentMode == .design && showGoldenRatio)
                         )
@@ -204,12 +227,8 @@ struct SmileDesignView: View {
             }
         }
         // IMPORTERS
-        .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj]) { res in
-            handleImport3D(res)
-        }
-        .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in
-            handleImportPhoto(res)
-        }
+        .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj]) { res in handleImport3D(res) }
+        .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in handleImportPhoto(res) }
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project") { _ in }
         .alert("Clear Workspace?", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -244,18 +263,21 @@ struct PhotoAnalysisView: View {
     let image: NSImage
     @Binding var landmarks: [LandmarkType: CGPoint]
     var isPlacing: Bool
+    var isLocked: Bool // NEW
     var activeType: LandmarkType?
     
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // Background Image with Placement Gesture
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: geo.size.width, height: geo.size.height)
+                    .contentShape(Rectangle()) // Ensure drag works on empty space if any
                     .gesture(DragGesture(minimumDistance: 0).onEnded { val in
-                        if isPlacing, let type = activeType {
-                            // Normalize coordinates (0-1)
+                        // Only place new points if NOT locked and Place Mode is ON
+                        if !isLocked && isPlacing, let type = activeType {
                             let imageFrame = AVMakeRect(aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: geo.size))
                             if imageFrame.contains(val.location) {
                                 let normX = (val.location.x - imageFrame.minX) / imageFrame.width
@@ -265,7 +287,10 @@ struct PhotoAnalysisView: View {
                         }
                     })
                 
-                // Draw Landmarks
+                // Draw Esthetic Lines (Behind dots)
+                EstheticLines2D(landmarks: landmarks, rect: AVMakeRect(aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: geo.size)))
+                
+                // Draw Interactive Landmarks
                 ForEach(LandmarkType.allCases, id: \.self) { type in
                     if let norm = landmarks[type] {
                         let imageFrame = AVMakeRect(aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: geo.size))
@@ -274,17 +299,44 @@ struct PhotoAnalysisView: View {
                         
                         Circle()
                             .fill(colorFor(type))
-                            .frame(width: 8, height: 8)
+                            .frame(width: 12, height: 12) // Larger hit target
+                            .shadow(radius: 2)
                             .position(x: x, y: y)
+                            // NEW: Drag Gesture for existing points
+                            .gesture(
+                                DragGesture()
+                                    .onChanged { val in
+                                        if !isLocked { // Allow moving if unlocked
+                                            // Calculate new normalized position from drag location
+                                            // Note: DragGesture value is in local coordinate space of the view (ZStack)
+                                            let newX = val.location.x
+                                            let newY = val.location.y
+                                            
+                                            // Clamp to image frame
+                                            let clampedX = min(max(newX, imageFrame.minX), imageFrame.maxX)
+                                            let clampedY = min(max(newY, imageFrame.minY), imageFrame.maxY)
+                                            
+                                            let normX = (clampedX - imageFrame.minX) / imageFrame.width
+                                            let normY = (clampedY - imageFrame.minY) / imageFrame.height
+                                            
+                                            landmarks[type] = CGPoint(x: normX, y: normY)
+                                        }
+                                    }
+                            )
                         
+                        // Labels
                         if isPlacing {
-                            Text(type.rawValue).font(.caption2).position(x: x, y: y - 10).foregroundStyle(.white).shadow(radius: 1)
+                            Text(type.rawValue)
+                                .font(.system(size: 10, weight: .bold))
+                                .padding(4)
+                                .background(Color.black.opacity(0.6))
+                                .cornerRadius(4)
+                                .position(x: x, y: y - 20)
+                                .foregroundStyle(.white)
+                                .allowsHitTesting(false) // Pass touches through text
                         }
                     }
                 }
-                
-                // Draw Esthetic Lines
-                EstheticLines2D(landmarks: landmarks, rect: AVMakeRect(aspectRatio: image.size, insideRect: CGRect(origin: .zero, size: geo.size)))
             }
             .clipped()
         }
@@ -329,6 +381,7 @@ struct EstheticLines2D: View {
             if let m = pt(.menton) { path.move(to: CGPoint(x: rect.minX, y: m.y)); path.addLine(to: CGPoint(x: rect.maxX, y: m.y)) }
         }
         .stroke(Color.white.opacity(0.6), lineWidth: 1)
+        .allowsHitTesting(false) // Ensure lines don't block drags
     }
 }
 
