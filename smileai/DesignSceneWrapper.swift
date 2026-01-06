@@ -23,6 +23,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
     // Landmarks Support
     var landmarks: [LandmarkType: SCNVector3]
     var activeLandmarkType: LandmarkType?
+    var isPlacingLandmarks: Bool
     var onLandmarkPicked: ((SCNVector3) -> Void)?
     
     var showGrid: Bool
@@ -32,7 +33,8 @@ struct DesignSceneWrapper: NSViewRepresentable {
         let view = EditorView()
         view.defaultCameraController.interactionMode = .orbitArcball
         view.defaultCameraController.inertiaEnabled = true
-        view.defaultCameraController.automaticTarget = true
+        view.defaultCameraController.automaticTarget = false // We lock to (0,0,0)
+        
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
@@ -46,28 +48,38 @@ struct DesignSceneWrapper: NSViewRepresentable {
         view.onToothTransformChange = onToothTransformChange
         view.currentToothStates = toothStates
         view.activeLandmarkType = activeLandmarkType
+        view.isPlacingLandmarks = isPlacingLandmarks
         view.onLandmarkPicked = onLandmarkPicked
         
         guard let root = view.scene?.rootNode else { return }
         
-        // Load Model
-        if root.childNode(withName: "PATIENT_MODEL", recursively: true) == nil {
+        // 1. SETUP THE INVISIBLE BOX (Container)
+        var container = root.childNode(withName: "CONTENT_CONTAINER", recursively: false)
+        if container == nil {
+            container = SCNNode()
+            container?.name = "CONTENT_CONTAINER"
+            root.addChildNode(container!)
+        }
+        
+        // 2. LOAD MODEL INTO BOX
+        if container?.childNode(withName: "PATIENT_MODEL", recursively: true) == nil {
             if let scene = try? SCNScene(url: scanURL, options: nil),
                let geoNode = findFirstGeometryNode(in: scene.rootNode) {
                 
                 let node = geoNode.clone()
                 node.name = "PATIENT_MODEL"
                 
+                // Initial Centering: Move Geometry center to Container Origin (0,0,0)
                 if let geo = node.geometry {
                     let (min, max) = geo.boundingBox
                     let cx = (min.x + max.x) / 2
                     let cy = (min.y + max.y) / 2
                     let cz = (min.z + max.z) / 2
-                    node.pivot = SCNMatrix4MakeTranslation(cx, cy, cz)
+                    // Shift model opposite to its center
+                    node.position = SCNVector3(-cx, -cy, -cz)
                 }
-                node.position = SCNVector3Zero
                 
-                // Material Setup
+                // Matte Material
                 node.geometry?.materials.forEach { mat in
                     mat.lightingModel = .lambert
                     mat.isDoubleSided = true
@@ -77,18 +89,35 @@ struct DesignSceneWrapper: NSViewRepresentable {
                     }
                 }
                 
-                root.addChildNode(node)
+                container?.addChildNode(node)
                 
                 DispatchQueue.main.async {
-                    self.onModelLoaded?((min: node.boundingBox.min, max: node.boundingBox.max))
+                    // Camera looks at the BOX center (0,0,0) which is perfect.
                     view.defaultCameraController.target = SCNVector3Zero
-                    view.defaultCameraController.frameNodes([node])
+                    view.defaultCameraController.frameNodes([container!])
                 }
             }
         }
         
+        // 3. SMART CENTERING (The Fix)
+        // As you click landmarks, slide the model so the landmark is at (0,0,0)
+        // This keeps the camera steady while the face moves into focus.
+        if mode == .analysis, let lastType = LandmarkType.allCases.last(where: { landmarks[$0] != nil }), let worldPos = landmarks[lastType] {
+             // We don't move the model constantly to avoid jitter, but we can set the pivot.
+             // Better: Set camera target to the landmark relative to world.
+             view.defaultCameraController.target = worldPos
+        }
+        
+        // 4. DESIGN ALIGNMENT
+        // In Design Mode, center strictly on the Smile (Midpoint of Canines)
+        if mode == .design, let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
+             let center = SCNVector3((lC.x+rC.x)/2, (lC.y+rC.y)/2, (lC.z+rC.z)/2)
+             view.defaultCameraController.target = center
+        }
+        
         updateSmileTemplate(root: root)
         updateLandmarkVisuals(root: root)
+        drawEstheticAnalysis(root: root)
         updateGrid(root: root)
     }
     
@@ -100,6 +129,85 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
+    // MARK: - ESTHETIC ANALYSIS (From Your Photos)
+    private func drawEstheticAnalysis(root: SCNNode) {
+        let containerName = "ESTHETIC_LINES"
+        root.childNode(withName: containerName, recursively: false)?.removeFromParentNode()
+        let container = SCNNode(); container.name = containerName; root.addChildNode(container)
+        
+        func drawLine(_ start: SCNVector3, _ end: SCNVector3, color: NSColor) {
+            let indices: [Int32] = [0, 1]
+            let source = SCNGeometrySource(vertices: [start, end])
+            let element = SCNGeometryElement(indices: indices, primitiveType: .line)
+            let geo = SCNGeometry(sources: [source], elements: [element])
+            geo.firstMaterial?.diffuse.contents = color
+            geo.firstMaterial?.emission.contents = color
+            container.addChildNode(SCNNode(geometry: geo))
+        }
+        
+        // 1. HORIZON & MIDLINE (Image: Face with crosshairs)
+        if let lp = landmarks[.leftPupil], let rp = landmarks[.rightPupil] {
+            // Interpupillary Line (Yellow)
+            drawLine(lp, rp, color: .yellow)
+            
+            // Facial Midline (Cyan) - Perpendicular bisector
+            let mid = SCNVector3((lp.x+rp.x)/2, (lp.y+rp.y)/2, (lp.z+rp.z)/2)
+            let drop = SCNVector3(mid.x, mid.y - 0.20, mid.z)
+            drawLine(mid, drop, color: .cyan)
+        }
+        
+        // 2. FACIAL THIRDS (Image: Ideal vertical position)
+        if let gl = landmarks[.glabella], let sn = landmarks[.subnasale], let me = landmarks[.menton] {
+            let w: CGFloat = 0.06 // Width of lines
+            // Glabella Plane
+            drawLine(SCNVector3(gl.x-w, gl.y, gl.z), SCNVector3(gl.x+w, gl.y, gl.z), color: .white)
+            // Subnasale Plane
+            drawLine(SCNVector3(sn.x-w, sn.y, sn.z), SCNVector3(sn.x+w, sn.y, sn.z), color: .white)
+            // Menton Plane
+            drawLine(SCNVector3(me.x-w, me.y, me.z), SCNVector3(me.x+w, me.y, me.z), color: .white)
+        }
+        
+        // 3. GOLDEN PROPORTION TEETH (Image: 1.618 - 1.0 - 0.618)
+        if let mid = landmarks[.midline], let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
+            let dx = rC.x - lC.x; let dy = rC.y - lC.y
+            let archWidth = CGFloat(sqrt(dx*dx + dy*dy))
+            
+            // Formula: The visible width of Central (1.618) + Lateral (1.0) + Canine (0.618) = 3.236
+            // We have two sides, so total unit divisor is 3.236 * 2 approx (depending on arch form)
+            // Let's approximate visible width from Canine to Canine.
+            let unit = archWidth / 6.472
+            
+            let yTop = mid.y + 0.005; let yBot = mid.y - 0.010; let z = mid.z
+            
+            // Central Incisors (1.618 units)
+            let wCent = unit * 1.618
+            drawLine(SCNVector3(mid.x, yTop, z), SCNVector3(mid.x, yBot, z), color: .red) // Midline
+            drawLine(SCNVector3(mid.x + wCent, yTop, z), SCNVector3(mid.x + wCent, yBot, z), color: .red)
+            drawLine(SCNVector3(mid.x - wCent, yTop, z), SCNVector3(mid.x - wCent, yBot, z), color: .red)
+            
+            // Lateral Incisors (1.0 unit)
+            let wLat = wCent + (unit * 1.0)
+            drawLine(SCNVector3(mid.x + wLat, yTop, z), SCNVector3(mid.x + wLat, yBot, z), color: .blue)
+            drawLine(SCNVector3(mid.x - wLat, yTop, z), SCNVector3(mid.x - wLat, yBot, z), color: .blue)
+            
+            // Canines (0.618 unit - visible part)
+            let wCan = wLat + (unit * 0.618)
+            drawLine(SCNVector3(mid.x + wCan, yTop, z), SCNVector3(mid.x + wCan, yBot, z), color: .green)
+            drawLine(SCNVector3(mid.x - wCan, yTop, z), SCNVector3(mid.x - wCan, yBot, z), color: .green)
+        }
+        
+        // 4. LIP PROPORTIONS (Image: Box around lips)
+        if let sn = landmarks[.subnasale], let me = landmarks[.menton], let st = landmarks[.upperLipCenter] {
+            // "Stomion" (Mouth closure) is approx upperLipCenter y
+            // Draw verticals connecting nose to chin
+            drawLine(sn, me, color: .gray)
+            
+            // Draw Horizontal at Stomion
+            let w: CGFloat = 0.03
+            drawLine(SCNVector3(st.x - w, st.y, st.z), SCNVector3(st.x + w, st.y, st.z), color: .magenta)
+        }
+    }
+    
     // MARK: - Landmarks
     private func updateLandmarkVisuals(root: SCNNode) {
         let containerName = "LANDMARKS_CONTAINER"
@@ -109,8 +217,16 @@ struct DesignSceneWrapper: NSViewRepresentable {
         root.addChildNode(container)
         
         for (type, pos) in landmarks {
-            let sphere = SCNSphere(radius: 0.002)
-            let color: NSColor = (type == .midline) ? .green : (type == .lipLine ? .red : .blue)
+            let sphere = SCNSphere(radius: 0.0015)
+            var color: NSColor = .blue
+            switch type {
+            case .rightPupil, .leftPupil: color = .yellow
+            case .midline, .glabella: color = .cyan
+            case .rightCommissure, .leftCommissure: color = .green
+            case .subnasale, .menton: color = .white
+            default: color = .blue
+            }
+            
             sphere.firstMaterial?.diffuse.contents = color
             sphere.firstMaterial?.emission.contents = color
             let node = SCNNode(geometry: sphere)
@@ -119,7 +235,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         }
     }
     
-    // MARK: - Smile Template Logic (FIXED TYPES)
+    // MARK: - Smile Template
     private func updateSmileTemplate(root: SCNNode) {
         let name = "SMILE_TEMPLATE"
         var templateNode = root.childNode(withName: name, recursively: false)
@@ -132,53 +248,51 @@ struct DesignSceneWrapper: NSViewRepresentable {
             }
             
             var basePos = SCNVector3Zero
-            var baseScale: Float = 1.0
+            var baseScale: CGFloat = 1.0
             
-            if let lCanine = landmarks[.leftCanine], let rCanine = landmarks[.rightCanine] {
-                basePos = SCNVector3((lCanine.x + rCanine.x)/2, (lCanine.y + rCanine.y)/2, (lCanine.z + rCanine.z)/2)
-                if let mid = landmarks[.midline] { basePos.x = mid.x }
-                if let lip = landmarks[.lipLine] { basePos.y = lip.y + 0.002 }
+            if let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
+                let cx = (lC.x + rC.x) / 2
+                let cy = (lC.y + rC.y) / 2
+                let cz = (lC.z + rC.z) / 2
+                basePos = SCNVector3(cx, cy, cz)
                 
-                // Calculate distance using Float/CGFloat agnostic math
-                let dx = rCanine.x - lCanine.x
-                let dy = rCanine.y - lCanine.y
-                let dz = rCanine.z - lCanine.z
-                // Convert to Double for sqrt then back to Float
-                let width = Float(sqrt(Double(dx*dx + dy*dy + dz*dz)))
-                baseScale = width * 15.0
+                if let mid = landmarks[.midline] { basePos.x = mid.x }
+                if let lip = landmarks[.upperLipCenter] { basePos.y = lip.y - 0.002 }
+                
+                let dx = rC.x - lC.x
+                let dy = rC.y - lC.y
+                let dist = sqrt(dx*dx + dy*dy)
+                baseScale = CGFloat(dist) * 15.0
             }
             
-            let finalScale = CGFloat(baseScale) * CGFloat(smileParams.scale)
+            let finalScale = baseScale * CGFloat(smileParams.scale)
             templateNode?.scale = SCNVector3(finalScale, finalScale, finalScale)
             
-            // Explicit Float casting for position
-            let px = Float(basePos.x) + smileParams.posX * 0.05
-            let py = Float(basePos.y) + smileParams.posY * 0.05
-            let pz = Float(basePos.z) + smileParams.posZ * 0.05
-            templateNode?.position = SCNVector3(CGFloat(px), CGFloat(py), CGFloat(pz))
+            let px = CGFloat(basePos.x) + CGFloat(smileParams.posX) * 0.05
+            let py = CGFloat(basePos.y) + CGFloat(smileParams.posY) * 0.05
+            let pz = CGFloat(basePos.z) + CGFloat(smileParams.posZ) * 0.05
+            templateNode?.position = SCNVector3(px, py, pz)
+            
+            // Fix Cant using Pupils
+            if let lp = landmarks[.leftPupil], let rp = landmarks[.rightPupil] {
+                let dy = rp.y - lp.y
+                let dx = rp.x - lp.x
+                let angle = atan2(dy, dx)
+                templateNode?.eulerAngles.z = CGFloat(angle)
+            }
             
             templateNode?.childNodes.forEach { tooth in
                 guard let toothName = tooth.name else { return }
                 
-                // 1. Get Base X as Float
-                let xVal = Float(tooth.position.x)
-                
-                // 2. Calculate Curve Z as Float
-                let curveZ = pow(xVal * 5.0, 2) * smileParams.curve * 0.5
-                
-                // 3. Get State Offsets (SIMD3<Float>)
+                let xVal = CGFloat(tooth.position.x)
+                let curveZ = pow(xVal * 5.0, 2) * CGFloat(smileParams.curve) * 0.5
                 let state = toothStates[toothName] ?? ToothState()
                 
-                // 4. Calculate final positions as Float (FIXED: Broken up expressions)
-                let newY = 0.0 + state.positionOffset.y * 0.01
-                let newX = xVal + state.positionOffset.x * 0.01
-                let newZ = curveZ + state.positionOffset.z * 0.01
+                let tX = xVal + CGFloat(state.positionOffset.x) * 0.01
+                let tY = 0.0 + CGFloat(state.positionOffset.y) * 0.01
+                let tZ = curveZ + CGFloat(state.positionOffset.z) * 0.01
                 
-                // 5. Assign using CGFloat cast (SCNVector3 requirement on macOS)
-                tooth.position.y = CGFloat(newY)
-                tooth.position.x = CGFloat(newX)
-                tooth.position.z = CGFloat(newZ)
-                
+                tooth.position = SCNVector3(tX, tY, tZ)
                 tooth.eulerAngles = SCNVector3(0, 0, CGFloat(state.rotation.z))
                 tooth.scale = SCNVector3(CGFloat(smileParams.ratio) * CGFloat(state.scale), CGFloat(smileParams.length) * CGFloat(state.scale), 1.0)
                 
@@ -235,9 +349,11 @@ struct DesignSceneWrapper: NSViewRepresentable {
     }
 }
 
+// MARK: - Editor View (Unchanged Logic, Included for Completeness)
 class EditorView: SCNView {
     var currentMode: DesignMode = .analysis
     var activeLandmarkType: LandmarkType?
+    var isPlacingLandmarks: Bool = false
     var onLandmarkPicked: ((SCNVector3) -> Void)?
     var onToothSelected: ((String?) -> Void)?
     var onToothTransformChange: ((String, ToothState) -> Void)?
@@ -250,11 +366,13 @@ class EditorView: SCNView {
         let loc = self.convert(event.locationInWindow, from: nil)
         switch currentMode {
         case .analysis:
-            if activeLandmarkType != nil {
+            if isPlacingLandmarks && activeLandmarkType != nil {
                 let results = self.hitTest(loc, options: [.rootNode: self.scene!.rootNode, .searchMode: SCNHitTestSearchMode.closest.rawValue])
                 if let hit = results.first(where: { $0.node.name == "PATIENT_MODEL" }) {
                     onLandmarkPicked?(hit.worldCoordinates)
                 }
+            } else {
+                super.mouseDown(with: event)
             }
         case .design:
             let results = self.hitTest(loc, options: nil)

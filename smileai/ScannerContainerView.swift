@@ -84,6 +84,16 @@ struct ScannerContainerView: View {
                                 .foregroundStyle(.green)
                             Text("Model Ready")
                                 .font(.headline)
+                            
+                            // --- NEW: DOWNLOAD BUTTON ---
+                            Button(action: {
+                                isExporting = true
+                            }) {
+                                Label("Save Model", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding(.top, 8)
+                            
                         case .failed(let error):
                             Image(systemName: "xmark.octagon.fill")
                                 .foregroundStyle(.red)
