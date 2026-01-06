@@ -116,8 +116,8 @@ struct ScannerContainerView: View {
                 }
             }
         }
-        // SYNC LOGIC
-        .onChange(of: viewModel.state) { newState in
+        // SYNC LOGIC (Updated for macOS 14 deprecation)
+        .onChange(of: viewModel.state) { _, newState in
             if case .completed(let url) = newState {
                 print("✅ Syncing Model to Design Tab: \(url.path)")
                 session.activeScanURL = url
@@ -172,5 +172,3 @@ struct SceneViewWrapper: NSViewRepresentable {
         }
     }
 }
-
-// Note: STLFile struct removed from here as it is defined elsewhere.
