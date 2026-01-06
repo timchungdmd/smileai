@@ -3,7 +3,6 @@ import SceneKit
 import ModelIO
 import SceneKit.ModelIO
 
-// Params struct
 struct SmileTemplateParams {
     var posX: Float; var posY: Float; var posZ: Float
     var scale: Float; var curve: Float; var length: Float; var ratio: Float
@@ -23,13 +22,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
     
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
-        
-        // --- IMPROVED CAMERA CONTROLS ---
-        // OrbitArcball allows free rotation around the center (like holding it in hand)
+        // OrbitArcball = "Holding object in hand" rotation
         view.defaultCameraController.interactionMode = .orbitArcball
         view.defaultCameraController.inertiaEnabled = true
         view.defaultCameraController.automaticTarget = true
-        
         view.allowsCameraControl = true
         view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
@@ -38,19 +34,14 @@ struct DesignSceneWrapper: NSViewRepresentable {
     }
     
     func updateNSView(_ view: EditorView, context: Context) {
-        // Mode Sync
         view.allowsCameraControl = !isCleanupMode
         view.isPaintMode = isCleanupMode
         
-        // Handle Deletion
         if triggerDelete {
             let indices = view.selectedIndices
             if !indices.isEmpty {
                 view.clearSelection()
-                DispatchQueue.main.async {
-                    onDelete?(indices)
-                    triggerDelete = false
-                }
+                DispatchQueue.main.async { onDelete?(indices); triggerDelete = false }
             } else {
                 DispatchQueue.main.async { triggerDelete = false }
             }
@@ -58,7 +49,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
         
         guard let root = view.scene?.rootNode else { return }
         
-        // Load Model (Robust Finder)
         if root.childNodes.isEmpty {
             if let scene = try? SCNScene(url: scanURL, options: nil),
                let geoNode = findFirstGeometryNode(in: scene.rootNode) {
@@ -66,60 +56,55 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 let node = geoNode.clone()
                 node.name = "PATIENT_MODEL"
                 
-                // --- FIX 1: PERFECT CENTERING ---
-                // Calculate the true center of the geometry
-                let (min, max) = node.boundingBox
-                let cx = (min.x + max.x) / 2
-                let cy = (min.y + max.y) / 2
-                let cz = (min.z + max.z) / 2
-                
-                // Set the Pivot to that center point
-                node.pivot = SCNMatrix4MakeTranslation(cx, cy, cz)
-                // Place the node at the world origin
+                // --- FIX 1: True Geometric Centering ---
+                // Calculate bounds of the GEOMETRY (skips empty node transforms)
+                if let geo = node.geometry {
+                    let (min, max) = geo.boundingBox
+                    let cx = (min.x + max.x) / 2
+                    let cy = (min.y + max.y) / 2
+                    let cz = (min.z + max.z) / 2
+                    node.pivot = SCNMatrix4MakeTranslation(cx, cy, cz)
+                }
                 node.position = SCNVector3Zero
                 
-                // --- FIX 2: TANGENTS & VISUALS ---
-                // Generate Tangents to prevent "missing attribute" crashes
-                if let geo = node.geometry, geo.sources(for: .tangent).isEmpty {
-                    let mdlMesh = MDLMesh(scnGeometry: geo)
-                    mdlMesh.addTangentBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
-                                            normalAttributeNamed: MDLVertexAttributeNormal,
-                                            tangentAttributeNamed: MDLVertexAttributeTangent)
-                    let newGeo = SCNGeometry(mdlMesh: mdlMesh)
-                    newGeo.materials = geo.materials // Keep original textures
-                    node.geometry = newGeo
-                }
-                
-                // --- FIX 3: REMOVE WHITE OVERLAY ---
-                node.geometry?.materials.forEach { mat in
-                    // Use Blinn shading (classic) instead of PBR.
-                    // PBR can look washed out (white) if no environment map is present.
-                    mat.lightingModel = .blinn
+                // --- FIX 2: Prevent Crashes & White Overlay ---
+                if let geo = node.geometry {
+                    // Generate Tangents if missing
+                    if geo.sources(for: .tangent).isEmpty {
+                        let mdlMesh = MDLMesh(scnGeometry: geo)
+                        mdlMesh.addTangentBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate, normalAttributeNamed: MDLVertexAttributeNormal, tangentAttributeNamed: MDLVertexAttributeTangent)
+                        let newGeo = SCNGeometry(mdlMesh: mdlMesh)
+                        newGeo.materials = geo.materials
+                        node.geometry = newGeo
+                    }
                     
-                    // Make it Matte (not shiny) to see texture clearly
-                    mat.specular.contents = NSColor(white: 0.1, alpha: 1.0)
-                    mat.roughness.contents = 0.8
-                    mat.metalness.contents = 0.0
-                    
-                    // Ensure we see inside the mesh
-                    mat.isDoubleSided = true
+                    // Material Setup
+                    node.geometry?.materials.forEach { mat in
+                        mat.lightingModel = .physicallyBased
+                        mat.isDoubleSided = true
+                        mat.roughness.contents = 0.5 // Less shiny = less white glare
+                        mat.metalness.contents = 0.0
+                        
+                        // Fallback Color: If texture is missing, use "Dental Clay" color
+                        // instead of White. (Red: 0.9, Green: 0.8, Blue: 0.7)
+                        if mat.diffuse.contents == nil {
+                            mat.diffuse.contents = NSColor(calibratedRed: 0.9, green: 0.85, blue: 0.8, alpha: 1.0)
+                        }
+                    }
                 }
                 
                 root.addChildNode(node)
-                
-                // Init Paint
                 view.prepareForPainting(node: node)
                 
                 DispatchQueue.main.async {
-                    self.onModelLoaded?((min: min, max: max))
-                    // Force camera to re-center on the new pivot
+                    self.onModelLoaded?((min: node.boundingBox.min, max: node.boundingBox.max))
+                    // Force camera to center
                     view.defaultCameraController.target = SCNVector3Zero
                     view.defaultCameraController.frameNodes([node])
                 }
             }
         }
         
-        // Update Features
         updateSmileTemplate(root: root, patientNode: root.childNode(withName: "PATIENT_MODEL", recursively: true))
         updateGrid(root: root)
     }
@@ -132,6 +117,8 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
+    // (Keep updateSmileTemplate, createProceduralArch, createToothGeo, updateGrid same as before...)
+    // ...
     // MARK: - Smile Template Logic
     private func updateSmileTemplate(root: SCNNode, patientNode: SCNNode?) {
         let name = "SMILE_TEMPLATE"
@@ -144,6 +131,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 root.addChildNode(templateNode!)
             }
             
+            // Auto-Scale
             var unitScale: CGFloat = 1.0
             if let pNode = patientNode {
                 let (min, max) = pNode.boundingBox
@@ -235,6 +223,7 @@ class EditorView: SCNView {
     func prepareForPainting(node: SCNNode) {
         self.geometryNode = node
         guard let geo = node.geometry, let src = geo.sources(for: .vertex).first else { return }
+        // Init White (1,1,1,1) so textures show through.
         self.vertexColors = Array(repeating: FloatColor(r: 1, g: 1, b: 1, a: 1), count: src.vectorCount)
         updateColorGeometry()
     }
@@ -254,13 +243,11 @@ class EditorView: SCNView {
     
     private func paint(event: NSEvent) {
         guard let node = geometryNode, let geo = node.geometry else { return }
-        
         let loc = self.convert(event.locationInWindow, from: nil)
         let results = self.hitTest(loc, options: [.rootNode: node, .searchMode: SCNHitTestSearchMode.closest.rawValue])
         guard let hit = results.first else { return }
         
         let localPoint = hit.localCoordinates
-        
         let bounds = node.boundingBox
         let scale = CGFloat(bounds.max.x - bounds.min.x)
         let r = max(scale * 0.03, 0.002)
@@ -276,14 +263,10 @@ class EditorView: SCNView {
             
             for i in 0..<vertexSource.vectorCount {
                 if selectedIndices.contains(i) { continue }
-                
                 let x = CGFloat(floatBuffer[i * stride + offset])
                 let y = CGFloat(floatBuffer[i * stride + offset + 1])
                 let z = CGFloat(floatBuffer[i * stride + offset + 2])
-                
-                let dx = x - localPoint.x
-                let dy = y - localPoint.y
-                let dz = z - localPoint.z
+                let dx = x - localPoint.x; let dy = y - localPoint.y; let dz = z - localPoint.z
                 
                 if (dx*dx + dy*dy + dz*dz) < rSq {
                     selectedIndices.insert(i)
@@ -297,19 +280,8 @@ class EditorView: SCNView {
     
     private func updateColorGeometry() {
         guard let node = geometryNode, let geo = node.geometry else { return }
-        
         let data = Data(bytes: vertexColors, count: vertexColors.count * MemoryLayout<FloatColor>.size)
-        let colorSource = SCNGeometrySource(
-            data: data,
-            semantic: .color,
-            vectorCount: vertexColors.count,
-            usesFloatComponents: true,
-            componentsPerVector: 4,
-            bytesPerComponent: MemoryLayout<Float>.size,
-            dataOffset: 0,
-            dataStride: MemoryLayout<FloatColor>.size
-        )
-        
+        let colorSource = SCNGeometrySource(data: data, semantic: .color, vectorCount: vertexColors.count, usesFloatComponents: true, componentsPerVector: 4, bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0, dataStride: MemoryLayout<FloatColor>.size)
         let otherSources = geo.sources.filter { $0.semantic != .color }
         let newGeo = SCNGeometry(sources: otherSources + [colorSource], elements: geo.elements)
         newGeo.materials = geo.materials
