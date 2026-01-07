@@ -43,19 +43,24 @@ struct ScannerContainerView: View {
                 
                 Divider()
                 
-                // Quality Selector
+                // Quality Selector (Simplified for User)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Reconstruction Quality")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
                     
-                    Picker("Quality", selection: $viewModel.selectedDetailLevel) {
-                        Text("Full (Textured)").tag(PhotogrammetrySession.Request.Detail.full)
-                        Text("Raw (Max Density)").tag(PhotogrammetrySession.Request.Detail.raw)
+                    // Replaced Picker with simple, intuitive Label
+                    HStack {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.blue)
+                        Text("High Precision")
+                            .font(.body)
+                            .fontWeight(.medium)
                     }
-                    .pickerStyle(.segmented)
-                    .disabled(viewModel.state.isProcessing)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.1)))
                 }
                 .padding(.horizontal)
                 

@@ -26,7 +26,9 @@ class ProcessingViewModel: ObservableObject {
     
     @Published var state: State = .idle
     @Published var consoleLog: String = "Ready. Drop HEIC/JPG Folder or Zip."
-    @Published var selectedDetailLevel: PhotogrammetrySession.Request.Detail = .full
+    
+    // Changed default to .raw (High Precision) as requested
+    @Published var selectedDetailLevel: PhotogrammetrySession.Request.Detail = .raw
     
     var currentModelURL: URL?
     private var startTime: Date?

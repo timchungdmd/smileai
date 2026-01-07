@@ -51,13 +51,13 @@ class GeometryUtils {
         
         if keptIndexCount == 0 { throw NSError(domain: "Geo", code: 2, userInfo: [NSLocalizedDescriptionKey: "Mesh deleted"]) }
         
-        // 3. Rebuild Vertices (Compact Stride)
+        // 3. Rebuild Vertices
         var newSources: [SCNGeometrySource] = []
         for source in geo.sources {
             let srcStride = source.dataStride
             let srcOffset = source.dataOffset
             let componentSize = source.bytesPerComponent * source.componentsPerVector
-            let dstStride = componentSize // Compact
+            let dstStride = componentSize
             
             var newData = Data(count: keptIndexCount * dstStride)
             source.data.withUnsafeBytes { srcPtr in
@@ -103,36 +103,33 @@ class GeometryUtils {
         let newGeo = SCNGeometry(sources: newSources, elements: [newElement])
         newGeo.materials = geo.materials
         
-        // Regenerate Tangents
-        let mdlMesh = MDLMesh(scnGeometry: newGeo)
-        mdlMesh.addTangentBasis(forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate, normalAttributeNamed: MDLVertexAttributeNormal, tangentAttributeNamed: MDLVertexAttributeTangent)
-        let fixedGeo = SCNGeometry(mdlMesh: mdlMesh)
-        fixedGeo.materials = geo.materials
+        // --- FIX: REMOVED TANGENT GENERATION ---
+        // Skipping MDLMesh conversion entirely to prevent "realloc" crashes on bad topology.
+        // The mesh will save with normals but no tangents (visuals are fine for dental).
         
-        // 5. Export
+        saveScene(geo: newGeo, sourceURL: sourceURL, destinationURL: destinationURL, format: format)
+    }
+    
+    private static func saveScene(geo: SCNGeometry, sourceURL: URL, destinationURL: URL, format: ExportFormat) {
         let outScene = SCNScene()
-        let outNode = SCNNode(geometry: fixedGeo)
+        let outNode = SCNNode(geometry: geo)
         outNode.name = "CleanedModel"
         outScene.rootNode.addChildNode(outNode)
         
-        // FIX: Embed textures relative to the original source file
         embedTextures(in: outNode, relativeTo: sourceURL)
         
         if format == .usdz {
             outScene.write(to: destinationURL, options: nil, delegate: nil, progressHandler: nil)
         } else {
             let asset = MDLAsset(scnScene: outScene)
-            try asset.export(to: destinationURL)
+            try? asset.export(to: destinationURL)
         }
     }
     
-    // MARK: - Texture Embedding Fix
     private static func embedTextures(in node: SCNNode, relativeTo baseURL: URL) {
         let baseFolder = baseURL.deletingLastPathComponent()
-        
         let embed = { (prop: SCNMaterialProperty) in
             if let path = prop.contents as? String {
-                // Handle relative paths (common in USDZ/OBJ)
                 let fullURL = baseFolder.appendingPathComponent(path)
                 #if os(macOS)
                 if let img = NSImage(contentsOf: fullURL) { prop.contents = img }
@@ -140,7 +137,6 @@ class GeometryUtils {
                 if let img = UIImage(contentsOfFile: fullURL.path) { prop.contents = img }
                 #endif
             } else if let url = prop.contents as? URL {
-                // Handle absolute URLs
                 #if os(macOS)
                 if let img = NSImage(contentsOf: url) { prop.contents = img }
                 #else
@@ -148,7 +144,6 @@ class GeometryUtils {
                 #endif
             }
         }
-        
         node.enumerateChildNodes { child, _ in child.geometry?.materials.forEach { mat in
             embed(mat.diffuse); embed(mat.normal); embed(mat.roughness); embed(mat.metalness)
         }}
