@@ -1,5 +1,5 @@
 //
-//  DentalConstraingts.swift
+//  DentalConstraints.swift
 //  smileai
 //
 //  Created by Tim Chung on 1/7/26.
@@ -43,14 +43,22 @@ extension ToothState {
     mutating func applySnapping(_ settings: SnapSettings) {
         guard settings.enabled else { return }
         
-        // Position snapping - cast CGFloat to Float, snap, then cast back
-        let gridSize = CGFloat(settings.gridSize)
-        position.x = round(position.x / gridSize) * gridSize
-        position.y = round(position.y / gridSize) * gridSize
-        position.z = round(position.z / gridSize) * gridSize
+        // Position Snapping (Grid)
+        let gridSize = settings.gridSize
+        if gridSize > 0 {
+            positionOffset.x = round(positionOffset.x / gridSize) * gridSize
+            positionOffset.y = round(positionOffset.y / gridSize) * gridSize
+            positionOffset.z = round(positionOffset.z / gridSize) * gridSize
+        }
         
-        // Rotation snapping (convert to degrees, snap, convert back)
-        let angleRad = CGFloat(settings.angleStep) * CGFloat.pi / 180.0
-        rotation.w = round(rotation.w / angleRad) * angleRad
+        // Rotation Snapping (Degrees -> Radians)
+        let angleStep = settings.angleStep
+        if angleStep > 0 {
+            let stepRad = angleStep * (Float.pi / 180.0)
+            
+            rotation.x = round(rotation.x / stepRad) * stepRad
+            rotation.y = round(rotation.y / stepRad) * stepRad
+            rotation.z = round(rotation.z / stepRad) * stepRad
+        }
     }
 }
