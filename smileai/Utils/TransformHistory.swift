@@ -2,16 +2,7 @@ import Foundation
 import SceneKit
 import Combine
 
-struct SmileTemplateParams: Equatable {
-    var posX: Float
-    var posY: Float
-    var posZ: Float
-    var scale: Float
-    var curve: Float
-    var length: Float
-    var ratio: Float
-}
-
+// Protocol and Commands for Undo/Redo
 protocol TransformCommand {
     func execute()
     func undo()
