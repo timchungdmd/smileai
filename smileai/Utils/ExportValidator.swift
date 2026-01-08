@@ -1,10 +1,3 @@
-//
-//  ExportValidator.swift
-//  smileai
-//
-//  Created by Tim Chung on 1/7/26.
-//
-
 import Foundation
 import SceneKit
 
@@ -107,7 +100,7 @@ class ExportValidator {
             return (false, errors)
         }
         
-        let midlineX = midline.x
+        let midlineX = Float(midline.x)
         let pairs = [(1, "Central"), (2, "Lateral"), (3, "Canine")]
         
         for (id, name) in pairs {
@@ -120,21 +113,21 @@ class ExportValidator {
             let rightPos = rightNode.worldPosition
             let leftPos = leftNode.worldPosition
             
-            let rightDistFromMid = abs(rightPos.x - midlineX)
-            let leftDistFromMid = abs(leftPos.x - midlineX)
+            let rightDistFromMid = abs(Float(rightPos.x) - midlineX)
+            let leftDistFromMid = abs(Float(leftPos.x) - midlineX)
             let distanceDiff = abs(rightDistFromMid - leftDistFromMid)
             
             if distanceDiff > symmetryTolerance {
-                errors.append("\(name): Asymmetric position (\(distanceDiff * 1000)mm)")
+                errors.append("\(name): Asymmetric position (\(String(format: "%.2f", distanceDiff * 1000))mm)")
             }
             
-            let heightDiff = abs(rightPos.y - leftPos.y)
+            let heightDiff = abs(Float(rightPos.y) - Float(leftPos.y))
             if heightDiff > symmetryTolerance {
-                errors.append("\(name): Asymmetric height (\(heightDiff * 1000)mm)")
+                errors.append("\(name): Asymmetric height (\(String(format: "%.2f", heightDiff * 1000))mm)")
             }
             
             if let rightState = states[rightID], let leftState = states[leftID] {
-                let scaleDiff = abs(rightState.scale.y - leftState.scale.y)
+                let scaleDiff = abs(Float(rightState.scale.y) - Float(leftState.scale.y))
                 if scaleDiff > 0.1 {
                     errors.append("\(name): Asymmetric size")
                 }
@@ -159,10 +152,10 @@ class ExportValidator {
         
         let leftPos = leftCanine.worldPosition
         let rightPos = rightCanine.worldPosition
-        let archWidth = abs(rightPos.x - leftPos.x)
+        let archWidth = abs(Float(rightPos.x) - Float(leftPos.x))
         
         if !DentalConstraints.archWidthRange.contains(archWidth) {
-            errors.append("Arch width out of range: \(archWidth * 1000)mm (expected 25-45mm)")
+            errors.append("Arch width out of range: \(String(format: "%.1f", archWidth * 1000))mm (expected 25-45mm)")
         }
         
         let orderedTeeth = [

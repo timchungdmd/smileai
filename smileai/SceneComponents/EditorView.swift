@@ -13,10 +13,11 @@ class EditorView: SCNView {
     var activeLandmarkType: LandmarkType?
     var isPlacingLandmarks: Bool = false
     var onLandmarkPicked: ((SCNVector3) -> Void)?
-    var onToothSelected: ((String?) -> Void)?
+    var onToothSelected: ((String?, Bool) -> Void)?
     var onToothTransformChange: ((String, ToothState) -> Void)?
     var currentToothStates: [String: ToothState] = [:]
     var snapSettings: SnapSettings = SnapSettings()
+    var selectionManager: SelectionManager?
     
     private var selectedToothNode: SCNNode?
     private var gizmo: GizmoNode?
@@ -58,7 +59,8 @@ class EditorView: SCNView {
             // Check tooth selection
             let results = self.hitTest(loc, options: nil)
             if let hit = results.first(where: { $0.node.name?.starts(with: "T_") == true }) {
-                selectTooth(hit.node)
+                let isMultiSelect = event.modifierFlags.contains(.shift)
+                selectTooth(hit.node, multiSelect: isMultiSelect)
             } else {
                 deselectTooth()
                 super.mouseDown(with: event)
@@ -82,15 +84,15 @@ class EditorView: SCNView {
             
             var state = dragStartToothState ?? currentToothStates[name] ?? ToothState()
             
-            // Apply transformation based on axis
-            let sensitivity: Float = 0.0001 // 0.1mm per pixel
+            // Apply transformation based on axis - cast Float to CGFloat
+            let sensitivity: CGFloat = 0.0001 // 0.1mm per pixel
             switch axis {
             case .x:
-                state.position.x += deltaX * sensitivity
+                state.position.x += CGFloat(deltaX) * sensitivity
             case .y:
-                state.position.y -= deltaY * sensitivity // Invert Y for screen space
+                state.position.y -= CGFloat(deltaY) * sensitivity // Invert Y for screen space
             case .z:
-                state.position.z += deltaY * sensitivity
+                state.position.z += CGFloat(deltaY) * sensitivity
             case .none:
                 break
             }
@@ -121,7 +123,7 @@ class EditorView: SCNView {
             
             // Rotation with Option + Scroll
             var state = currentToothStates[name] ?? ToothState()
-            let rotationDelta = Float(event.scrollingDeltaY) * 0.01
+            let rotationDelta = CGFloat(Float(event.scrollingDeltaY) * 0.01)
             
             // Rotate around Y axis (most common for teeth)
             let currentAngle = state.rotation.w
@@ -139,9 +141,9 @@ class EditorView: SCNView {
         return gizmo.hitTest(location: location, in: self)
     }
     
-    private func selectTooth(_ node: SCNNode) {
+    private func selectTooth(_ node: SCNNode, multiSelect: Bool) {
         selectedToothNode = node
-        onToothSelected?(node.name)
+        onToothSelected?(node.name, multiSelect)
         
         // Create or update gizmo
         if gizmo == nil {
@@ -162,7 +164,7 @@ class EditorView: SCNView {
         }
         selectedToothNode = nil
         gizmo?.isHidden = true
-        onToothSelected?(nil)
+        onToothSelected?(nil, false)
     }
     
     private func highlightTooth(_ node: SCNNode, highlighted: Bool) {

@@ -34,12 +34,12 @@ class CollisionValidator {
             var correctionVector = SCNVector3Zero
             
             if minOverlap == overlapX {
-                // FIX: Cast CGFloat to Float
-                correctionVector.x = (world1Max.x + world1Min.x > world2Max.x + world2Min.x) ? Float(overlapX) : -Float(overlapX)
+                // FIX: Keep as CGFloat (SCNVector3 uses CGFloat, not Float)
+                correctionVector.x = (world1Max.x + world1Min.x > world2Max.x + world2Min.x) ? overlapX : -overlapX
             } else if minOverlap == overlapY {
-                correctionVector.y = (world1Max.y + world1Min.y > world2Max.y + world2Min.y) ? Float(overlapY) : -Float(overlapY)
+                correctionVector.y = (world1Max.y + world1Min.y > world2Max.y + world2Min.y) ? overlapY : -overlapY
             } else {
-                correctionVector.z = (world1Max.z + world1Min.z > world2Max.z + world2Min.z) ? Float(overlapZ) : -Float(overlapZ)
+                correctionVector.z = (world1Max.z + world1Min.z > world2Max.z + world2Min.z) ? overlapZ : -overlapZ
             }
             
             return CollisionResult(
@@ -58,7 +58,6 @@ class CollisionValidator {
         let xPositions = teeth.map { Float($0.worldPosition.x) }
         let archWidth = (xPositions.max() ?? 0) - (xPositions.min() ?? 0)
         
-        // FIX: Use contains properly with Float
         return DentalConstraints.archWidthRange.contains(archWidth)
     }
 }

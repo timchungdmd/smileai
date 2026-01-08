@@ -10,11 +10,12 @@ struct ToothState: Equatable, Codable {
     var quaternion: SCNQuaternion {
         get {
             let angle = Float(rotation.w)
-            SCNQuaternion(
-                x: Float(rotation.x) * sin(angle/2),
-                y: Float(rotation.y) * sin(angle/2),
-                z: Float(rotation.z) * sin(angle/2),
-                w: cos(angle/2)
+            let halfAngle = angle / 2
+            return SCNQuaternion(
+                x: CGFloat(Float(rotation.x) * sin(halfAngle)),
+                y: CGFloat(Float(rotation.y) * sin(halfAngle)),
+                z: CGFloat(Float(rotation.z) * sin(halfAngle)),
+                w: CGFloat(cos(halfAngle))
             )
         }
         set {

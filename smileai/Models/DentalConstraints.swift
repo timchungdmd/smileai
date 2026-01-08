@@ -43,13 +43,14 @@ extension ToothState {
     mutating func applySnapping(_ settings: SnapSettings) {
         guard settings.enabled else { return }
         
-        // Position snapping
-        position.x = round(position.x / settings.gridSize) * settings.gridSize
-        position.y = round(position.y / settings.gridSize) * settings.gridSize
-        position.z = round(position.z / settings.gridSize) * settings.gridSize
+        // Position snapping - cast CGFloat to Float, snap, then cast back
+        let gridSize = CGFloat(settings.gridSize)
+        position.x = round(position.x / gridSize) * gridSize
+        position.y = round(position.y / gridSize) * gridSize
+        position.z = round(position.z / gridSize) * gridSize
         
         // Rotation snapping (convert to degrees, snap, convert back)
-        let angleRad = settings.angleStep * .pi / 180.0
+        let angleRad = CGFloat(settings.angleStep) * CGFloat.pi / 180.0
         rotation.w = round(rotation.w / angleRad) * angleRad
     }
 }
