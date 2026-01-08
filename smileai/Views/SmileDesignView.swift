@@ -45,6 +45,12 @@ struct SmileDesignView: View {
     @State private var showValidationReport = false
     @State private var validationReport: ValidationReport?
     
+    @State private var smileCurve: SmileCurve?
+    @State private var showSmileCurve: Bool = true
+    @State private var selectedCurveType: SmileCurve.CurveType = .natural
+    @State private var isEditingCurve: Bool = false
+    @State private var curveIntensity: Float = 1.0
+    
     var nextLandmark: LandmarkType? {
         let sequence = LandmarkType.allCases
         return facePhoto != nil
@@ -216,6 +222,7 @@ struct SmileDesignView: View {
         VStack(alignment: .leading, spacing: 15) {
             Label("Esthetic Analysis", systemImage: "scope")
                 .font(.headline)
+
             
             HStack {
                 Toggle(isOn: $isPlacingLandmarks) {
@@ -267,6 +274,8 @@ struct SmileDesignView: View {
         }
     }
     
+
+            
     private var designControlsView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
