@@ -3,16 +3,6 @@ import SceneKit
 import ModelIO
 import SceneKit.ModelIO
 
-struct SmileTemplateParams {
-    var posX: Float
-    var posY: Float
-    var posZ: Float
-    var scale: Float
-    var curve: Float
-    var length: Float
-    var ratio: Float
-}
-
 struct DesignSceneWrapper: NSViewRepresentable {
     let scanURL: URL
     let mode: DesignMode
@@ -21,7 +11,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
     var smileParams: SmileTemplateParams
     
     var toothStates: [String: ToothState]
-    var onToothSelected: ((String?) -> Void)?
+    var onToothSelected: ((String?, Bool) -> Void)?
     var onToothTransformChange: ((String, ToothState) -> Void)?
     
     var landmarks: [LandmarkType: SCNVector3]
@@ -33,7 +23,9 @@ struct DesignSceneWrapper: NSViewRepresentable {
     var onSnapshotTaken: ((NSImage) -> Void)?
     
     var showGrid: Bool
-    var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)?
+    var snapSettings: SnapSettings
+    var toothLibrary: ToothLibraryManager?
+    var selectionManager: SelectionManager?
     
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
@@ -55,20 +47,29 @@ struct DesignSceneWrapper: NSViewRepresentable {
         view.activeLandmarkType = activeLandmarkType
         view.isPlacingLandmarks = isPlacingLandmarks
         view.onLandmarkPicked = onLandmarkPicked
+        view.snapSettings = snapSettings
+        view.selectionManager = selectionManager
         
         // Snapshot Logic
         if triggerSnapshot {
             DispatchQueue.main.async {
                 let scaleFactor: CGFloat = 4.0
                 let currentSize = view.bounds.size
-                let targetSize = CGSize(width: currentSize.width * scaleFactor, height: currentSize.height * scaleFactor)
+                let targetSize = CGSize(
+                    width: currentSize.width * scaleFactor,
+                    height: currentSize.height * scaleFactor
+                )
                 
                 let renderer = SCNRenderer(device: view.device, options: nil)
                 renderer.scene = view.scene
                 renderer.pointOfView = view.pointOfView
                 renderer.autoenablesDefaultLighting = true
                 
-                let image = renderer.snapshot(atTime: 0, with: targetSize, antialiasingMode: .multisampling4X)
+                let image = renderer.snapshot(
+                    atTime: 0,
+                    with: targetSize,
+                    antialiasingMode: .multisampling4X
+                )
                 onSnapshotTaken?(image)
                 
                 DispatchQueue.main.async {
@@ -97,12 +98,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 
                 if let geo = node.geometry {
                     let (min, max) = geo.boundingBox
-                    // Explicit cast to CGFloat to fix ambiguity
                     let cx = CGFloat((min.x + max.x) / 2)
                     let cy = CGFloat((min.y + max.y) / 2)
                     let cz = CGFloat((min.z + max.z) / 2)
                     
-                    // Center the model
                     node.position = SCNVector3(x: -cx, y: -cy, z: -cz)
                 }
                 
@@ -111,7 +110,12 @@ struct DesignSceneWrapper: NSViewRepresentable {
                     mat.isDoubleSided = true
                     mat.specular.contents = NSColor.black
                     if mat.diffuse.contents == nil {
-                        mat.diffuse.contents = NSColor(calibratedRed: 0.9, green: 0.85, blue: 0.8, alpha: 1.0)
+                        mat.diffuse.contents = NSColor(
+                            calibratedRed: 0.9,
+                            green: 0.85,
+                            blue: 0.8,
+                            alpha: 1.0
+                        )
                     }
                 }
                 
@@ -125,18 +129,41 @@ struct DesignSceneWrapper: NSViewRepresentable {
         }
         
         // 3. Camera Centering
-        if mode == .analysis, let lastType = LandmarkType.allCases.last(where: { landmarks[$0] != nil }), let worldPos = landmarks[lastType] {
-             view.defaultCameraController.target = worldPos
+        if mode == .analysis,
+           let lastType = LandmarkType.allCases.last(where: { landmarks[$0] != nil }),
+           let worldPos = landmarks[lastType] {
+            view.defaultCameraController.target = worldPos
         }
-        if mode == .design, let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
-             let center = SCNVector3(x: (lC.x+rC.x)/2, y: (lC.y+rC.y)/2, z: (lC.z+rC.z)/2)
-             view.defaultCameraController.target = center
+        if mode == .design,
+           let lC = landmarks[.leftCanine],
+           let rC = landmarks[.rightCanine] {
+            let center = SCNVector3(
+                x: (lC.x + rC.x) / 2,
+                y: (lC.y + rC.y) / 2,
+                z: (lC.z + rC.z) / 2
+            )
+            view.defaultCameraController.target = center
         }
         
-        updateSmileTemplate(root: root)
+        updateSmileTemplate(root: root, view: view)
         updateLandmarkVisuals(root: root)
         drawEstheticAnalysis(root: root)
         updateGrid(root: root)
+        
+        // Update selection visuals
+        if let template = root.childNode(withName: "SMILE_TEMPLATE", recursively: false) {
+            template.childNodes.forEach { tooth in
+                guard let name = tooth.name else { return }
+                let isSelected = selectionManager?.isSelected(name) ?? false
+                
+                let emissionColor = isSelected ? NSColor.cyan : NSColor.black
+                tooth.geometry?.materials.forEach { mat in
+                    mat.emission.contents = emissionColor
+                }
+            }
+        }
+        
+        view.updateGizmoPosition()
     }
     
     private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
@@ -147,8 +174,8 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
-    // MARK: - SMILE TEMPLATE UPDATES
-    private func updateSmileTemplate(root: SCNNode) {
+    // MARK: - SMILE TEMPLATE
+    private func updateSmileTemplate(root: SCNNode, view: EditorView) {
         let name = "SMILE_TEMPLATE"
         var templateNode = root.childNode(withName: name, recursively: false)
         
@@ -159,7 +186,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 root.addChildNode(templateNode!)
             }
             
-            // Positioning Logic
+            // Positioning
             var basePos = SCNVector3Zero
             
             if let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
@@ -179,7 +206,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 
                 let dx = rC.x - lC.x
                 let dy = rC.y - lC.y
-                let dist = sqrt(dx*dx + dy*dy)
+                let dist = sqrt(dx * dx + dy * dy)
                 
                 let finalScale = CGFloat(dist) * 15.0 * CGFloat(smileParams.scale)
                 templateNode?.scale = SCNVector3(x: finalScale, y: finalScale, z: finalScale)
@@ -197,30 +224,31 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 templateNode?.eulerAngles.z = CGFloat(angle)
             }
             
+            // Update individual teeth
             templateNode?.childNodes.forEach { tooth in
                 guard let toothName = tooth.name else { return }
                 
                 let xVal = CGFloat(tooth.position.x)
-                let curveZ = pow(xVal * 5.0, 2) * CGFloat(smileParams.curve) * 0.5
+                
+                // Catenary curve
+                let a: CGFloat = 0.1
+                let curveZ = a * (cosh(xVal * 5.0 / a) - 1) * CGFloat(smileParams.curve) * 0.5
+                
                 let state = toothStates[toothName] ?? ToothState()
                 
-                let tX = xVal + CGFloat(state.positionOffset.x) * 0.01
-                let tY = 0.0 + CGFloat(state.positionOffset.y) * 0.01
-                let tZ = curveZ + CGFloat(state.positionOffset.z) * 0.01
+                let tX = xVal + CGFloat(state.position.x)
+                let tY = 0.0 + CGFloat(state.position.y)
+                let tZ = curveZ + CGFloat(state.position.z)
                 
                 tooth.position = SCNVector3(x: tX, y: tY, z: tZ)
-                tooth.eulerAngles = SCNVector3(x: 0, y: 0, z: CGFloat(state.rotation.z))
+                tooth.orientation = state.quaternion
                 
-                let sRatio = CGFloat(smileParams.ratio) * CGFloat(state.scale)
-                let sLength = CGFloat(smileParams.length) * CGFloat(state.scale)
-                tooth.scale = SCNVector3(x: sRatio, y: sLength, z: 1.0)
+                let sRatio = CGFloat(smileParams.ratio) * CGFloat(state.scale.x)
+                let sLength = CGFloat(smileParams.length) * CGFloat(state.scale.y)
+                tooth.scale = SCNVector3(x: sRatio, y: sLength, z: state.scale.z)
                 
                 tooth.geometry?.firstMaterial?.readsFromDepthBuffer = false
                 tooth.renderingOrder = 2000
-                
-                if tooth.geometry?.firstMaterial?.emission.contents as? NSColor != NSColor.blue {
-                    tooth.geometry?.firstMaterial?.emission.contents = NSColor.black
-                }
             }
         } else {
             templateNode?.removeFromParentNode()
@@ -231,10 +259,11 @@ struct DesignSceneWrapper: NSViewRepresentable {
     private func createProceduralArch() -> SCNNode {
         let root = SCNNode()
         let baseW: CGFloat = 0.0085
-        let definitions: [(id: Int, wRatio: CGFloat, hRatio: CGFloat, type: String)] = [
-            (1, 1.0, 1.0, "Central"),
-            (2, 0.75, 0.85, "Lateral"),
-            (3, 0.85, 0.95, "Canine")
+        
+        let definitions: [(id: Int, wRatio: CGFloat, hRatio: CGFloat, type: ToothType)] = [
+            (1, 1.0, 1.0, .central),
+            (2, 0.75, 0.85, .lateral),
+            (3, 0.85, 0.95, .canine)
         ]
         
         var xCursor: CGFloat = baseW / 2.0
@@ -242,11 +271,18 @@ struct DesignSceneWrapper: NSViewRepresentable {
         for def in definitions {
             let w = baseW * def.wRatio
             let h = baseW * 1.2 * def.hRatio
+            
             let rNode: SCNNode
             let lNode: SCNNode
             
-            rNode = createToothGeo(width: w, height: h)
-            lNode = createToothGeo(width: w, height: h)
+            // Try library first, fallback to procedural
+            if let libraryTooth = toothLibrary?.instantiateTooth(type: def.type) {
+                rNode = libraryTooth.clone()
+                lNode = libraryTooth.clone()
+            } else {
+                rNode = createToothGeo(width: w, height: h)
+                lNode = createToothGeo(width: w, height: h)
+            }
             
             rNode.position = SCNVector3(x: xCursor, y: 0, z: 0)
             rNode.name = "T_\(def.id)_R"
@@ -262,11 +298,21 @@ struct DesignSceneWrapper: NSViewRepresentable {
     }
     
     private func createToothGeo(width: CGFloat, height: CGFloat) -> SCNNode {
-        let path = NSBezierPath(roundedRect: CGRect(x: -width/2, y: -height/2, width: width, height: height), xRadius: width*0.3, yRadius: width*0.3)
-        let shape = SCNShape(path: path, extrusionDepth: width*0.2)
-        shape.chamferRadius = width*0.05
+        let path = NSBezierPath(
+            roundedRect: CGRect(x: -width / 2, y: -height / 2, width: width, height: height),
+            xRadius: width * 0.3,
+            yRadius: width * 0.3
+        )
+        let shape = SCNShape(path: path, extrusionDepth: width * 0.2)
+        shape.chamferRadius = width * 0.05
+        
         let mat = SCNMaterial()
-        mat.diffuse.contents = NSColor(white: 1.0, alpha: 0.8)
+        mat.lightingModel = .physicallyBased
+        mat.diffuse.contents = NSColor(white: 1.0, alpha: 0.9)
+        mat.roughness.contents = 0.3
+        mat.metalness.contents = 0.0
+        
+        shape.materials = [mat]
         return SCNNode(geometry: shape)
     }
     
@@ -279,7 +325,12 @@ struct DesignSceneWrapper: NSViewRepresentable {
         root.addChildNode(container)
         
         var safeZ: CGFloat = 0.05
-        let protrusions = [landmarks[.subnasale], landmarks[.upperLipCenter], landmarks[.lowerLipCenter], landmarks[.menton]]
+        let protrusions = [
+            landmarks[.subnasale],
+            landmarks[.upperLipCenter],
+            landmarks[.lowerLipCenter],
+            landmarks[.menton]
+        ]
         if let maxZ = protrusions.compactMap({ $0?.z }).max() {
             safeZ = CGFloat(maxZ) + 0.015
         } else if let c1 = landmarks[.leftCanine]?.z, let c2 = landmarks[.rightCanine]?.z {
@@ -297,6 +348,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
             
             geo.firstMaterial?.diffuse.contents = color
             geo.firstMaterial?.emission.contents = color
+            geo.firstMaterial?.lightingModel = .constant
             geo.firstMaterial?.readsFromDepthBuffer = false
             geo.firstMaterial?.writesToDepthBuffer = false
             
@@ -305,26 +357,43 @@ struct DesignSceneWrapper: NSViewRepresentable {
             container.addChildNode(node)
         }
         
-        // Lines Logic
+        // Pupillary line
         if let lp = landmarks[.leftPupil], let rp = landmarks[.rightPupil] {
             drawLine(lp, rp, color: .yellow)
-            let mid = SCNVector3(x: (lp.x+rp.x)/2, y: (lp.y+rp.y)/2, z: 0)
+            let mid = SCNVector3(x: (lp.x + rp.x) / 2, y: (lp.y + rp.y) / 2, z: 0)
             let drop = SCNVector3(x: mid.x, y: mid.y - 0.20, z: 0)
             drawLine(mid, drop, color: .cyan)
         }
         
-        if let gl = landmarks[.glabella], let sn = landmarks[.subnasale], let me = landmarks[.menton] {
+        // Facial thirds
+        if let gl = landmarks[.glabella],
+           let sn = landmarks[.subnasale],
+           let me = landmarks[.menton] {
             let w: CGFloat = 0.06
-            drawLine(SCNVector3(x: gl.x-w, y: gl.y, z: 0), SCNVector3(x: gl.x+w, y: gl.y, z: 0), color: .white)
-            drawLine(SCNVector3(x: sn.x-w, y: sn.y, z: 0), SCNVector3(x: sn.x+w, y: sn.y, z: 0), color: .white)
-            drawLine(SCNVector3(x: me.x-w, y: me.y, z: 0), SCNVector3(x: me.x+w, y: me.y, z: 0), color: .white)
+            drawLine(
+                SCNVector3(x: gl.x - w, y: gl.y, z: 0),
+                SCNVector3(x: gl.x + w, y: gl.y, z: 0),
+                color: .white
+            )
+            drawLine(
+                SCNVector3(x: sn.x - w, y: sn.y, z: 0),
+                SCNVector3(x: sn.x + w, y: sn.y, z: 0),
+                color: .white
+            )
+            drawLine(
+                SCNVector3(x: me.x - w, y: me.y, z: 0),
+                SCNVector3(x: me.x + w, y: me.y, z: 0),
+                color: .white
+            )
         }
         
         // Golden Percentage (23-15-12)
-        if let mid = landmarks[.midline], let lC = landmarks[.leftCanine], let rC = landmarks[.rightCanine] {
+        if let mid = landmarks[.midline],
+           let lC = landmarks[.leftCanine],
+           let rC = landmarks[.rightCanine] {
             let dx = rC.x - lC.x
             let dy = rC.y - lC.y
-            let archWidth = CGFloat(sqrt(dx*dx + dy*dy))
+            let archWidth = CGFloat(sqrt(dx * dx + dy * dy))
             let yTop = mid.y + 0.005
             let yBot = mid.y - 0.010
             
@@ -332,21 +401,59 @@ struct DesignSceneWrapper: NSViewRepresentable {
             let wLatCumulative = archWidth * 0.38
             let wCanCumulative = archWidth * 0.50
             
-            drawLine(SCNVector3(x: CGFloat(mid.x), y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x), y: CGFloat(yBot), z: 0), color: .red)
-            drawLine(SCNVector3(x: CGFloat(mid.x)+wCent, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)+wCent, y: CGFloat(yBot), z: 0), color: .red)
-            drawLine(SCNVector3(x: CGFloat(mid.x)-wCent, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)-wCent, y: CGFloat(yBot), z: 0), color: .red)
+            // Central incisors (23%)
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x), y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x), y: CGFloat(yBot), z: 0),
+                color: .red
+            )
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) + wCent, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) + wCent, y: CGFloat(yBot), z: 0),
+                color: .red
+            )
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) - wCent, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) - wCent, y: CGFloat(yBot), z: 0),
+                color: .red
+            )
             
-            drawLine(SCNVector3(x: CGFloat(mid.x)+wLatCumulative, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)+wLatCumulative, y: CGFloat(yBot), z: 0), color: .blue)
-            drawLine(SCNVector3(x: CGFloat(mid.x)-wLatCumulative, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)-wLatCumulative, y: CGFloat(yBot), z: 0), color: .blue)
+            // Lateral incisors (15%)
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) + wLatCumulative, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) + wLatCumulative, y: CGFloat(yBot), z: 0),
+                color: .blue
+            )
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) - wLatCumulative, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) - wLatCumulative, y: CGFloat(yBot), z: 0),
+                color: .blue
+            )
             
-            drawLine(SCNVector3(x: CGFloat(mid.x)+wCanCumulative, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)+wCanCumulative, y: CGFloat(yBot), z: 0), color: .green)
-            drawLine(SCNVector3(x: CGFloat(mid.x)-wCanCumulative, y: CGFloat(yTop), z: 0), SCNVector3(x: CGFloat(mid.x)-wCanCumulative, y: CGFloat(yBot), z: 0), color: .green)
+            // Canines (12%)
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) + wCanCumulative, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) + wCanCumulative, y: CGFloat(yBot), z: 0),
+                color: .green
+            )
+            drawLine(
+                SCNVector3(x: CGFloat(mid.x) - wCanCumulative, y: CGFloat(yTop), z: 0),
+                SCNVector3(x: CGFloat(mid.x) - wCanCumulative, y: CGFloat(yBot), z: 0),
+                color: .green
+            )
         }
         
-        if let sn = landmarks[.subnasale], let me = landmarks[.menton], let st = landmarks[.upperLipCenter] {
+        // E-line (Esthetic plane)
+        if let sn = landmarks[.subnasale],
+           let me = landmarks[.menton],
+           let st = landmarks[.upperLipCenter] {
             drawLine(sn, me, color: .gray)
             let w: CGFloat = 0.03
-            drawLine(SCNVector3(x: CGFloat(st.x) - w, y: CGFloat(st.y), z: 0), SCNVector3(x: CGFloat(st.x) + w, y: CGFloat(st.y), z: 0), color: .magenta)
+            drawLine(
+                SCNVector3(x: CGFloat(st.x) - w, y: CGFloat(st.y), z: 0),
+                SCNVector3(x: CGFloat(st.x) + w, y: CGFloat(st.y), z: 0),
+                color: .magenta
+            )
         }
     }
     
@@ -360,18 +467,26 @@ struct DesignSceneWrapper: NSViewRepresentable {
         for (type, pos) in landmarks {
             let sphere = SCNSphere(radius: 0.0015)
             var color: NSColor = .blue
+            
             switch type {
-            case .rightPupil, .leftPupil: color = .yellow
-            case .midline, .glabella: color = .cyan
-            case .rightCommissure, .leftCommissure: color = .green
-            case .subnasale, .menton: color = .white
-            default: color = .blue
+            case .rightPupil, .leftPupil:
+                color = .yellow
+            case .midline, .glabella:
+                color = .cyan
+            case .rightCommissure, .leftCommissure:
+                color = .green
+            case .subnasale, .menton:
+                color = .white
+            default:
+                color = .blue
             }
+            
             sphere.firstMaterial?.diffuse.contents = color
             sphere.firstMaterial?.emission.contents = color
+            sphere.firstMaterial?.lightingModel = .constant
             sphere.firstMaterial?.readsFromDepthBuffer = false
+            
             let node = SCNNode(geometry: sphere)
-            // Explicit cast
             node.position = pos
             node.renderingOrder = 1001
             container.addChildNode(node)
@@ -381,108 +496,41 @@ struct DesignSceneWrapper: NSViewRepresentable {
     private func updateGrid(root: SCNNode) {
         let name = "GOLDEN_GRID"
         var gridNode = root.childNode(withName: name, recursively: false)
+        
         if showGrid {
             if gridNode == nil {
                 let grid = SCNNode()
                 let mat = SCNMaterial()
                 mat.diffuse.contents = NSColor.cyan
+                mat.lightingModel = .constant
+                
                 let lineH = SCNPlane(width: 0.0005, height: 0.1)
                 lineH.materials = [mat]
+                
                 let cW: CGFloat = 0.0085
                 let lW = cW * 0.618
                 let offsets = [0, cW, cW + lW]
+                
                 for x in offsets {
                     let rL = SCNNode(geometry: lineH)
                     rL.position.x = x
                     grid.addChildNode(rL)
+                    
                     let lL = SCNNode(geometry: lineH)
                     lL.position.x = -x
                     grid.addChildNode(lL)
                 }
+                
                 grid.name = name
                 root.addChildNode(grid)
                 gridNode = grid
             }
-            // Position near template
+            
             let templatePos = root.childNode(withName: "SMILE_TEMPLATE", recursively: false)?.position ?? SCNVector3Zero
             gridNode?.position = templatePos
             gridNode?.position.z += 0.005
         } else {
             gridNode?.removeFromParentNode()
         }
-    }
-}
-
-// MARK: - EDITOR VIEW
-class EditorView: SCNView {
-    var currentMode: DesignMode = .analysis
-    var activeLandmarkType: LandmarkType?
-    var isPlacingLandmarks: Bool = false
-    var onLandmarkPicked: ((SCNVector3) -> Void)?
-    var onToothSelected: ((String?) -> Void)?
-    var onToothTransformChange: ((String, ToothState) -> Void)?
-    var currentToothStates: [String: ToothState] = [:]
-    
-    private var selectedToothNode: SCNNode?
-    private var lastDragPos: CGPoint?
-    
-    override func mouseDown(with event: NSEvent) {
-        let loc = self.convert(event.locationInWindow, from: nil)
-        switch currentMode {
-        case .analysis:
-            if isPlacingLandmarks && activeLandmarkType != nil {
-                let results = self.hitTest(loc, options: [.rootNode: self.scene!.rootNode, .searchMode: SCNHitTestSearchMode.closest.rawValue])
-                if let hit = results.first(where: { $0.node.name == "PATIENT_MODEL" }) {
-                    onLandmarkPicked?(hit.worldCoordinates)
-                }
-            } else {
-                super.mouseDown(with: event)
-            }
-        case .design:
-            let results = self.hitTest(loc, options: nil)
-            if let hit = results.first(where: { $0.node.name?.starts(with: "T_") == true }) {
-                self.selectedToothNode = hit.node
-                self.allowsCameraControl = false
-                onToothSelected?(hit.node.name)
-                
-                // Visual Selection
-                self.scene?.rootNode.childNode(withName: "SMILE_TEMPLATE", recursively: true)?.childNodes.forEach {
-                    $0.geometry?.firstMaterial?.emission.contents = NSColor.black
-                }
-                hit.node.geometry?.firstMaterial?.emission.contents = NSColor.blue
-            } else {
-                self.selectedToothNode = nil
-                self.allowsCameraControl = true
-                onToothSelected?(nil)
-                
-                // Deselect
-                self.scene?.rootNode.childNode(withName: "SMILE_TEMPLATE", recursively: true)?.childNodes.forEach {
-                    $0.geometry?.firstMaterial?.emission.contents = NSColor.black
-                }
-                super.mouseDown(with: event)
-            }
-        }
-        lastDragPos = loc
-    }
-    
-    override func mouseDragged(with event: NSEvent) {
-        let loc = self.convert(event.locationInWindow, from: nil)
-        if currentMode == .design, let tooth = selectedToothNode, let name = tooth.name, let last = lastDragPos {
-            let deltaX = Float(loc.x - last.x)
-            let deltaY = Float(loc.y - last.y)
-            var state = currentToothStates[name] ?? ToothState()
-            
-            // Adjust State
-            state.positionOffset.x += deltaX * 0.05
-            state.positionOffset.y -= deltaY * 0.05
-            onToothTransformChange?(name, state)
-        } else {
-            super.mouseDragged(with: event)
-        }
-        lastDragPos = loc
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        super.mouseUp(with: event)
     }
 }

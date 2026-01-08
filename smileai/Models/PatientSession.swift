@@ -1,9 +1,9 @@
 import Foundation
+import SceneKit
 import Combine
 
+@MainActor
 class PatientSession: ObservableObject {
-    // The shared patient scan URL
     @Published var activeScanURL: URL?
-    // The shared template URL
-    @Published var activeTemplateURL: URL?
+    @Published var hasUnsavedChanges: Bool = false
 }
