@@ -2,6 +2,7 @@ import SceneKit
 import AppKit
 
 class EditorView: SCNView {
+    
     // MARK: - Properties
     var currentMode: DesignMode = .analysis
     var activeLandmarkType: LandmarkType?
@@ -66,8 +67,7 @@ class EditorView: SCNView {
         let hitResults = self.hitTest(loc, options: hitOptions)
         
         // 1. GIZMO ROTATION (Highest Priority)
-        // Check if we hit the transparent sphere of the FreeRotateGizmo
-        if let hit = hitResults.first(where: { $0.node.name == "GIZMO_ROTATE_HANDLE" }) {
+        if let _ = hitResults.first(where: { $0.node.name == "GIZMO_ROTATE_HANDLE" }) {
             isRotatingTooth = true
             dragStartPosition = loc
             self.allowsCameraControl = false
@@ -76,7 +76,6 @@ class EditorView: SCNView {
         
         // 2. CURVE MANIPULATION
         if !curveEditor.isLocked {
-            // Use .all to find handles buried inside teeth
             let curveHits = self.hitTest(loc, options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
             if let hit = curveHits.first(where: { $0.node.name?.starts(with: "CURVE_HANDLE_") == true }),
                let index = curveEditor.getPointIndex(for: hit.node) {
@@ -142,16 +141,15 @@ class EditorView: SCNView {
             
             let sensitivity: CGFloat = 0.01
             
-            // Apply rotation (Euler is simplest for basic tumbling)
+            // Apply rotation
             tooth.eulerAngles.y += dy * sensitivity
             tooth.eulerAngles.x += dx * sensitivity
             
-            // Sync Gizmo Position
+            // Sync Gizmo
             self.gizmo?.position = tooth.worldPosition
             
             // Notify State Change
             let state = currentToothStates[tooth.name!] ?? ToothState()
-            // Note: In a real app, you'd calculate the new rotation back into the ToothState struct
             onToothTransformChange?(tooth.name!, state)
             
             dragStartPosition = loc
@@ -175,7 +173,6 @@ class EditorView: SCNView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { return .copy }
     
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        // Use the dedicated ToothDropHandler (ensure this file exists in your project)
         guard let result = ToothDropHandler.handleDrop(in: self, sender: sender, curvePoints: curveEditor.points) else {
             return false
         }
@@ -185,7 +182,6 @@ class EditorView: SCNView {
             onToothDrop?(id, result.url) // Replace
             
         case .curvePoint(let pos, let rot):
-            // Check collisions
             if let nearest = findNearestTooth(to: pos) {
                 onDropCollision?(nearest, result.url, pos, rot)
             } else {
@@ -233,31 +229,58 @@ class EditorView: SCNView {
     
     private func findNearestTooth(to pos: SCNVector3) -> String? {
         var nearestID: String?
+        // Initialize as Float to match SceneKit native types (avoids casting inside loop)
         var minDst: Float = 0.005 // 5mm threshold
         
         self.scene?.rootNode.enumerateChildNodes { node, _ in
-            if let name = node.name, name.starts(with: "T_") {
-                let d = sqrt(pow(node.worldPosition.x - pos.x, 2) + pow(node.worldPosition.y - pos.y, 2) + pow(node.worldPosition.z - pos.z, 2))
-                if d < minDst {
-                    minDst = d
-                    nearestID = name
-                }
+            guard let name = node.name, name.starts(with: "T_") else { return }
+            
+            // Calculate delta components
+            // Note: On macOS, worldPosition uses CGFloat, on iOS Float.
+            // Assuming macOS (AppKit), we cast to Float to keep math fast and consistent with minDst
+            let dx = Float(node.worldPosition.x - pos.x)
+            let dy = Float(node.worldPosition.y - pos.y)
+            let dz = Float(node.worldPosition.z - pos.z)
+            
+            // Euclidean distance
+            let d = sqrt(dx*dx + dy*dy + dz*dz)
+            
+            if d < minDst {
+                minDst = d
+                nearestID = name
             }
         }
         return nearestID
     }
     
-    // Smart Raycasting
+    // MARK: - Smart Raycasting (Fixed)
     private func resolveSmartPoint(location: CGPoint) -> SCNVector3? {
         guard let scene = self.scene else { return nil }
         
         // 1. Try Mesh Hit
-        let options: [SCNHitTestOption: Any] = [.searchMode: SCNHitTestSearchMode.closest.rawValue, .rootNode: scene.rootNode, .ignoreHiddenNodes: true]
+        let options: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.closest.rawValue,
+            .rootNode: scene.rootNode,
+            .ignoreHiddenNodes: true
+        ]
+        
         let hits = self.hitTest(location, options: options)
+        
         if let hit = hits.first(where: { $0.node.name == "PATIENT_MODEL" }) {
             let offset: CGFloat = 0.0005
-            return SCNVector3(hit.worldCoordinates.x + hit.worldNormal.x * offset, hit.worldCoordinates.y + hit.worldNormal.y * offset, hit.worldCoordinates.z + hit.worldNormal.z * offset)
+            
+            // Deconstructed expression to solve compiler timeout
+            let nx = hit.worldNormal.x * offset
+            let ny = hit.worldNormal.y * offset
+            let nz = hit.worldNormal.z * offset
+            
+            let finalX = hit.worldCoordinates.x + nx
+            let finalY = hit.worldCoordinates.y + ny
+            let finalZ = hit.worldCoordinates.z + nz
+            
+            return SCNVector3(finalX, finalY, finalZ)
         }
+        
         // 2. Fallback Plane
         return projectToCameraFacingPlane(location: location)
     }
@@ -265,16 +288,17 @@ class EditorView: SCNView {
     private func projectToCameraFacingPlane(location: CGPoint) -> SCNVector3? {
         guard let _ = self.pointOfView else { return nil }
         var centerPos = SCNVector3Zero
-        if let model = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) { centerPos = model.worldPosition }
+        if let model = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) {
+            centerPos = model.worldPosition
+        }
         
         let near = self.unprojectPoint(SCNVector3(location.x, location.y, 0))
         let far = self.unprojectPoint(SCNVector3(location.x, location.y, 1))
         let dir = SCNVector3(far.x - near.x, far.y - near.y, far.z - near.z)
         
-        // Plane Z usually works best for "Frontal" editing, but camera-facing is better for free rotation
-        // Simplified to Z-plane at model depth for stability in this context
         let planeZ = centerPos.z
         if abs(dir.z) < 0.0001 { return nil }
+        
         let t = (planeZ - near.z) / dir.z
         return SCNVector3(near.x + dir.x * t, near.y + dir.y * t, planeZ)
     }
