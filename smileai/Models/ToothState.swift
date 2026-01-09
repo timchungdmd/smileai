@@ -19,9 +19,3 @@ struct SmileTemplateParams: Equatable, Codable {
     var ratio: Float
 }
 
-// MARK: - Ruler State
-struct GoldenRulerState {
-    var start: CGPoint = .zero
-    var end: CGPoint = .zero
-    var isVisible: Bool = false
-}

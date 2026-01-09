@@ -23,6 +23,7 @@ struct SmileDesignView: View {
     @State private var isRulerLocked: Bool = false
     @State private var ruler2D = GoldenRulerState()
     @State private var ruler3D = GoldenRulerState()
+    @State private var selectedRatioType: Int = 0 // Tracks picker selection
     
     // Smile Curve
     @State private var isDrawingCurve: Bool = false
@@ -91,7 +92,6 @@ struct SmileDesignView: View {
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project3D") { _ in }
         .fileExporter(isPresented: $isExporting2D, document: ImageFile(image: render2DAnalysis()), contentType: .png, defaultFilename: "Analysis_Snapshot") { _ in }
         .alert("Clear Workspace?", isPresented: $showDeleteConfirmation) { Button("Cancel", role: .cancel) { }; Button("Clear All", role: .destructive) { session.activeScanURL = nil; facePhoto = nil; landmarks2D.removeAll(); landmarks3D.removeAll(); toothAssignments.removeAll(); importedFiles.removeAll(); customCurvePoints.removeAll() } }
-        // NEW: Collision Alert
         .alert("Replace Tooth?", isPresented: $showReplaceAlert, presenting: replaceAlertData) { data in
             Button("Replace Existing") {
                 handleToothDrop(toothID: data.existingID, fileURL: data.newURL)
@@ -124,9 +124,52 @@ struct SmileDesignView: View {
         VStack(alignment: .leading, spacing: 15) {
             Label("Analysis", systemImage: "scope").font(.headline)
             Toggle(isOn: $useStoneMaterial) { Label("Stone Mode", systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal") }.toggleStyle(.button)
-            HStack { Toggle(isOn: $isPlacingLandmarks) { Label("Place", systemImage: "target") }.toggleStyle(.button).disabled(landmarksLocked); Toggle(isOn: $landmarksLocked) { Label("Locked", systemImage: landmarksLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(landmarksLocked ? .orange : .green) }.controlSize(.large).frame(maxWidth: .infinity)
-            HStack { Toggle(isOn: $isRulerToolActive) { Label("Golden Ruler", systemImage: "ruler.fill") }.toggleStyle(.button).frame(maxWidth: .infinity).tint(.yellow); Toggle(isOn: $isRulerLocked) { Image(systemName: isRulerLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isRulerLocked ? .red : .green).disabled(!isRulerToolActive) }
-            Button("Reset All") { landmarks3D.removeAll(); landmarks2D.removeAll(); landmarksLocked = false; ruler2D = GoldenRulerState(); ruler3D = GoldenRulerState() }.buttonStyle(.bordered).controlSize(.small)
+            
+            HStack {
+                Toggle(isOn: $isPlacingLandmarks) { Label("Place", systemImage: "target") }.toggleStyle(.button).disabled(landmarksLocked)
+                Toggle(isOn: $landmarksLocked) { Label("Locked", systemImage: landmarksLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(landmarksLocked ? .orange : .green)
+            }.controlSize(.large).frame(maxWidth: .infinity)
+            
+            HStack {
+                Toggle(isOn: $isRulerToolActive) { Label("Golden Ruler", systemImage: "ruler.fill") }.toggleStyle(.button).frame(maxWidth: .infinity).tint(.yellow)
+                Toggle(isOn: $isRulerLocked) { Image(systemName: isRulerLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isRulerLocked ? .red : .green).disabled(!isRulerToolActive)
+            }
+            
+            if isRulerToolActive {
+                GroupBox("Ruler Settings") {
+                    VStack {
+                        // Transparency Slider
+                        HStack {
+                            Image(systemName: "eye")
+                            Slider(value: Binding(
+                                get: { ruler2D.opacity },
+                                set: { ruler2D.opacity = $0; ruler3D.opacity = $0 }
+                            ), in: 0.1...1.0)
+                        }
+                        
+                        // Ratio Selector
+                        Picker("Ratio", selection: Binding(
+                            get: { selectedRatioType },
+                            set: { val in
+                                selectedRatioType = val
+                                if val == 0 { ruler2D.setRatioType(.goldenRatio); ruler3D.setRatioType(.goldenRatio) }
+                                if val == 1 { ruler2D.setRatioType(.halves); ruler3D.setRatioType(.halves) }
+                                if val == 2 { ruler2D.setRatioType(.dentalWidths); ruler3D.setRatioType(.dentalWidths) }
+                            }
+                        )) {
+                            Text("Golden Ratio").tag(0)
+                            Text("Halves").tag(1)
+                            Text("Dental").tag(2)
+                        }.pickerStyle(.segmented)
+                    }
+                }
+            }
+            
+            Button("Reset All") {
+                landmarks3D.removeAll(); landmarks2D.removeAll(); landmarksLocked = false
+                ruler2D = GoldenRulerState(); ruler3D = GoldenRulerState()
+                selectedRatioType = 0
+            }.buttonStyle(.bordered).controlSize(.small)
         }
     }
     
@@ -146,8 +189,17 @@ struct SmileDesignView: View {
         GeometryReader { geo in
             HStack(spacing: 2) {
                 if let image = facePhoto {
-                    ZStack(alignment: .topTrailing) { PhotoAnalysisView(image: image, landmarks: $landmarks2D, isPlacing: isPlacingLandmarks, isLocked: landmarksLocked, activeType: nil).overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D)).background(Color.black); Button(action: { facePhoto = nil; landmarks2D.removeAll() }) { Image(systemName: "trash.circle.fill").font(.title).foregroundStyle(.red) }.buttonStyle(.plain).padding(10) }.frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
+                    ZStack(alignment: .topTrailing) {
+                        PhotoAnalysisView(image: image, landmarks: $landmarks2D, isPlacing: isPlacingLandmarks, isLocked: landmarksLocked, activeType: nil)
+                            .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
+                            .background(Color.black)
+                        
+                        Button(action: { facePhoto = nil; landmarks2D.removeAll() }) {
+                            Image(systemName: "trash.circle.fill").font(.title).foregroundStyle(.red)
+                        }.buttonStyle(.plain).padding(10)
+                    }.frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
+                
                 if let url = session.activeScanURL {
                     ZStack(alignment: .bottomTrailing) {
                         DesignSceneWrapper(
@@ -163,16 +215,21 @@ struct SmileDesignView: View {
                             isDrawingCurve: $isDrawingCurve, isCurveLocked: isCurveLocked, customCurvePoints: $customCurvePoints,
                             useStoneMaterial: useStoneMaterial,
                             onToothDrop: { toothID, fileURL in handleToothDrop(toothID: toothID, fileURL: fileURL) },
-                            showReplaceAlert: $showReplaceAlert, // BINDING
-                            replaceAlertData: $replaceAlertData // BINDING
+                            showReplaceAlert: $showReplaceAlert,
+                            replaceAlertData: $replaceAlertData
                         )
                         .id(url)
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler3D))
                         
-                        Button(action: { triggerSnapshot = true }) { Image(systemName: "camera.viewfinder").font(.largeTitle).padding().background(Circle().fill(Color.white.opacity(0.8))) }.buttonStyle(.plain).padding()
+                        Button(action: { triggerSnapshot = true }) {
+                            Image(systemName: "camera.viewfinder").font(.largeTitle).padding().background(Circle().fill(Color.white.opacity(0.8)))
+                        }.buttonStyle(.plain).padding()
                     }.frame(width: facePhoto != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
-                if facePhoto == nil && session.activeScanURL == nil { ContentUnavailableView("Drag & Drop", systemImage: "arrow.down.doc.fill").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                
+                if facePhoto == nil && session.activeScanURL == nil {
+                    ContentUnavailableView("Drag & Drop", systemImage: "arrow.down.doc.fill").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
     }
@@ -186,24 +243,27 @@ struct SmileDesignView: View {
         case .unknown: break
         }
     }
+    
     private func handleDeleteKey() -> KeyPress.Result {
         if let name = selectedToothName { let old = toothStates[name] ?? ToothState(); history.pushCommand(ToothTransformCommand(toothID: name, oldState: old, newState: ToothState(), applyState: { id, s in toothStates[id] = s })); toothStates[name] = ToothState(); return .handled }
         if !customCurvePoints.isEmpty { customCurvePoints.removeLast(); return .handled }
         return .ignored
     }
+    
     func handleToothDrop(toothID: String, fileURL: URL) { var typeKey = "Central"; if toothID.contains("2") { typeKey = "Lateral" } else if toothID.contains("3") { typeKey = "Canine" }; toothAssignments[typeKey] = fileURL; libraryID = UUID(); statusMessage = "✅ Replaced \(typeKey) Shape" }
     
     func bindingFor(_ key: String) -> Binding<URL?> { Binding(get: { toothAssignments[key] }, set: { if let url = $0 { toothAssignments[key] = url } else { toothAssignments.removeValue(forKey: key) }; libraryID = UUID() }) }
+    
     @MainActor func render2DAnalysis() -> NSImage? { guard let image = facePhoto else { return nil }; let renderer = ImageRenderer(content: PhotoAnalysisView(image: image, landmarks: $landmarks2D, isPlacing: false, isLocked: true, activeType: nil).overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D)).frame(width: image.size.width, height: image.size.height)); renderer.scale = 2.0; return renderer.nsImage }
+    
     func handleImport3D(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent); try? FileManager.default.removeItem(at: dst); try? FileManager.default.copyItem(at: url, to: dst); DispatchQueue.main.async { session.activeScanURL = dst; statusMessage = "✅ Loaded" } } }
+    
     func handleImportPhoto(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; if let img = NSImage(contentsOf: url) { DispatchQueue.main.async { facePhoto = img; statusMessage = "✅ Loaded" } } } }
+    
     func handleImportLibrary(_ result: Result<[URL], Error>) { if case .success(let urls) = result { var foundFiles: [URL] = []; func scan(_ url: URL) { let start = url.startAccessingSecurityScopedResource(); defer { if start { url.stopAccessingSecurityScopedResource() } }; var isDir: ObjCBool = false; if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { if let c = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) { for f in c { scan(f) } } } else if url.pathExtension.lowercased() == "obj" { foundFiles.append(url) } }; for url in urls { scan(url) }; DispatchQueue.main.async { self.importedFiles = foundFiles; self.statusMessage = "✅ Loaded Lib" } } }
 }
 
-// SUBVIEWS (Keep existing subviews like ToothPicker, ToothDropSlot, etc.)
+// SUBVIEWS (Helpers)
 struct ToothPicker: View { @Binding var selection: URL?; let files: [URL]; var body: some View { Menu { ForEach(files, id: \.self) { file in Button(file.lastPathComponent) { selection = file } }; Divider(); Button("None (Procedural)") { selection = nil } } label: { HStack { Text(selection?.lastPathComponent ?? "Select File...").font(.caption).truncationMode(.middle); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.caption2) }.padding(4).background(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5))) }.menuStyle(.borderlessButton).frame(maxWidth: .infinity) } }
 struct ToothDropSlot: View { let label: String; @Binding var assignment: URL?; @State private var isTargeted: Bool = false; var body: some View { GridRow { Text(label).frame(width: 50, alignment: .leading); ZStack { RoundedRectangle(cornerRadius: 6).fill(isTargeted ? Color.blue.opacity(0.2) : Color.clear).stroke(isTargeted ? Color.blue : Color.gray.opacity(0.5), lineWidth: 1); HStack { if let url = assignment { Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle); Spacer(); Button(action: { assignment = nil }) { Image(systemName: "xmark.circle.fill").foregroundStyle(.gray) }.buttonStyle(.plain) } else { Text("Drop here...").font(.caption).foregroundStyle(.secondary); Spacer() } }.padding(4) }.frame(height: 24).dropDestination(for: URL.self) { items, _ in if let url = items.first { assignment = url; return true }; return false } isTargeted: { isTargeted = $0 } } } }
-struct GoldenRulerOverlay: View { var isActive: Bool; var isLocked: Bool; @Binding var state: GoldenRulerState; var body: some View { ZStack { Color.clear.contentShape(Rectangle()).allowsHitTesting(isActive && !state.isVisible).gesture(DragGesture(minimumDistance: 0).onChanged { val in if !state.isVisible { state.start = val.startLocation; state.end = val.location } }.onEnded { val in state.end = val.location; if hypot(state.end.x - state.start.x, state.end.y - state.start.y) > 20 { state.isVisible = true } }); if state.isVisible { RulerGraphic(start: state.start, end: state.end); if !isLocked { RulerHandle(pos: $state.start); RulerHandle(pos: $state.end) } } } } }
-struct RulerHandle: View { @Binding var pos: CGPoint; var body: some View { Circle().fill(Color.yellow).frame(width: 8, height: 8).shadow(radius: 1).position(pos).gesture(DragGesture().onChanged { val in pos = val.location }) } }
-struct RulerGraphic: View { var start: CGPoint; var end: CGPoint; var body: some View { Canvas { context, size in var path = Path(); path.move(to: start); path.addLine(to: end); context.stroke(path, with: .color(.yellow), lineWidth: 2); let dx = end.x - start.x; let dy = end.y - start.y; let len = sqrt(dx*dx + dy*dy); let px = -dy / len * 15; let py = dx / len * 15; let caps = [0.0, 1.0]; for p in caps { let tx = start.x + dx * p; let ty = start.y + dy * p; var cap = Path(); cap.move(to: CGPoint(x: tx - px, y: ty - py)); cap.addLine(to: CGPoint(x: tx + px, y: ty + py)); context.stroke(cap, with: .color(.yellow), lineWidth: 2) }; let percentages: [CGFloat] = [0.12, 0.27, 0.50, 0.73, 0.88]; for p in percentages { let tx = start.x + dx * p; let ty = start.y + dy * p; var tick = Path(); tick.move(to: CGPoint(x: tx - px, y: ty - py)); tick.addLine(to: CGPoint(x: tx + px, y: ty + py)); context.stroke(tick, with: .color(.yellow), lineWidth: (p == 0.5 ? 3 : 1.5)) }; let midX = start.x + dx * 0.5; let midY = start.y + dy * 0.5; context.draw(Text("23-15-12 %").font(.caption2).bold().foregroundColor(.yellow), at: CGPoint(x: midX, y: midY - 20)) }.allowsHitTesting(false) } }
 struct ExportToolsView: View { @Binding var isExporting: Bool; @Binding var selectedFormat: GeometryUtils.ExportFormat; var body: some View { HStack { Picker("", selection: $selectedFormat) { Text("STL").tag(GeometryUtils.ExportFormat.stl); Text("USDZ").tag(GeometryUtils.ExportFormat.usdz) }.frame(width: 80); Button("Export") { isExporting = true }.buttonStyle(.borderedProminent) } } }
