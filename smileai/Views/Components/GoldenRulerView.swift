@@ -91,31 +91,11 @@ struct GoldenRulerState: Equatable {
             
         case .goldenPercentage:
             // Request: 23% | 15% | 12% (Symmetrical from Midline)
-            // Total = 100%. Half = 50%.
-            // From Left (0.0) to Right (1.0):
-            // Canine (12%) -> Lateral (15%) -> Central (23%) -> MID -> Central (23%) -> Lateral (15%) -> Canine (12%)
-            // Ticks:
-            // 1. 0.12
-            // 2. 0.12 + 0.15 = 0.27
-            // 3. 0.27 + 0.23 = 0.50 (Mid)
-            // 4. 0.50 + 0.23 = 0.73
-            // 5. 0.73 + 0.15 = 0.88
             self.activeRatios = [0.12, 0.27, 0.50, 0.73, 0.88]
             self.activeLabels = ["12%", "15%", "23%", "23%", "15%", "12%"]
             
         case .goldenRatio:
             // Request: 1.618 : 1 : 0.618 (Symmetrical)
-            // Central (1.618) : Lateral (1) : Canine (0.618)
-            // Total Unit per side = 1.618 + 1 + 0.618 = 3.236
-            // Total Width = 6.472
-            
-            // Normalized Ticks from Left (0.0):
-            // 1. Canine End: 0.618 / 6.472 = 0.0955
-            // 2. Lateral End: (0.618 + 1.0) / 6.472 = 0.2500
-            // 3. Central End (Mid): (1.618 + 1.0 + 0.618) / 6.472 = 0.5000
-            // 4. Central End: 0.5 + 0.25 = 0.7500
-            // 5. Lateral End: 0.75 + 0.1545 = 0.9045
-            
             self.activeRatios = [0.0955, 0.25, 0.50, 0.75, 0.9045]
             self.activeLabels = ["0.618", "1.0", "1.618", "1.618", "1.0", "0.618"]
             
@@ -199,15 +179,19 @@ struct GoldenRulerOverlay: View {
                 
                 // Handles
                 if !isLocked {
+                    // Start Handle
                     RulerHandle(pos: $state.start, color: .yellow)
+                    // End Handle
                     RulerHandle(pos: $state.end, color: .yellow)
+                    // Center Move Handle (New)
+                    RulerMoveHandle(start: $state.start, end: $state.end)
                 }
             }
         }
     }
 }
 
-// MARK: - Draggable Handle
+// MARK: - Draggable Handle (Endpoint)
 struct RulerHandle: View {
     @Binding var pos: CGPoint
     var color: Color
@@ -220,6 +204,62 @@ struct RulerHandle: View {
             .overlay(Circle().stroke(Color.white, lineWidth: 1))
             .position(pos)
             .gesture(DragGesture().onChanged { val in pos = val.location })
+    }
+}
+
+// MARK: - Move Handle (Center)
+struct RulerMoveHandle: View {
+    @Binding var start: CGPoint
+    @Binding var end: CGPoint
+    
+    // Track drag state
+    @State private var dragStartP0: CGPoint?
+    @State private var dragStartP1: CGPoint?
+    
+    // Computed Center
+    var center: CGPoint {
+        CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+    }
+    
+    var body: some View {
+        ZStack {
+            // Visual indicator for the handle
+            Circle()
+                .fill(Color.white.opacity(0.01)) // Mostly transparent hit area
+                .frame(width: 40, height: 40) // Larger hit target
+                .overlay(
+                    Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.yellow)
+                        .padding(4)
+                        .background(Circle().fill(Color.black.opacity(0.5)))
+                )
+        }
+        .position(center)
+        .gesture(
+            DragGesture()
+                .onChanged { val in
+                    // 1. Snapshot initial positions at start of drag
+                    if dragStartP0 == nil {
+                        dragStartP0 = start
+                        dragStartP1 = end
+                    }
+                    
+                    // 2. Apply translation delta to both points
+                    let tx = val.translation.width
+                    let ty = val.translation.height
+                    
+                    if let p0 = dragStartP0, let p1 = dragStartP1 {
+                        start = CGPoint(x: p0.x + tx, y: p0.y + ty)
+                        end = CGPoint(x: p1.x + tx, y: p1.y + ty)
+                    }
+                }
+                .onEnded { _ in
+                    // 3. Reset state
+                    dragStartP0 = nil
+                    dragStartP1 = nil
+                }
+        )
     }
 }
 
@@ -247,7 +287,7 @@ struct RulerGraphic: View {
             path.addLine(to: end)
             context.stroke(path, with: .color(.yellow.opacity(opacity)), lineWidth: 2)
             
-            // 2. End Caps (FIXED: Added width parameter)
+            // 2. End Caps
             drawTick(context: context, at: 0.0, px: px, py: py, length: 15, width: 2)
             drawTick(context: context, at: 1.0, px: px, py: py, length: 15, width: 2)
             
@@ -263,11 +303,7 @@ struct RulerGraphic: View {
             
             // 4. Segment Labels
             if showLabels && !labels.isEmpty {
-                // We have tick positions: 0.0, [ratios], 1.0
-                // Labels correspond to the spaces *between* ticks
                 var allPoints = [0.0] + ratios + [1.0]
-                
-                // Ensure we don't out of bounds if labels count mismatch
                 let loopCount = min(labels.count, allPoints.count - 1)
                 
                 for i in 0..<loopCount {
@@ -278,7 +314,6 @@ struct RulerGraphic: View {
                     let tx = start.x + dx * mid
                     let ty = start.y + dy * mid
                     
-                    // Offset text perpendicular to line
                     let textPos = CGPoint(x: tx + px * 20, y: ty + py * 20)
                     
                     let text = Text(labels[i])
@@ -294,7 +329,7 @@ struct RulerGraphic: View {
             if showLabels {
                 let midX = start.x + dx * 0.5
                 let midY = start.y + dy * 0.5
-                let labelPos = CGPoint(x: midX - px * 35, y: midY - py * 35) // Further out
+                let labelPos = CGPoint(x: midX - px * 35, y: midY - py * 35)
                 
                 let displayLen = String(format: "%.0f px", len)
                 let text = Text(displayLen).font(.caption2)

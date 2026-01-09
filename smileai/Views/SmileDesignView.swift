@@ -18,12 +18,15 @@ struct SmileDesignView: View {
     @State private var landmarksLocked: Bool = false
     @State private var triggerSnapshot: Bool = false
     
+    // NEW: View Lock State
+    @State private var isModelLocked: Bool = false
+    
     // Tools
     @State private var isRulerToolActive: Bool = false
     @State private var isRulerLocked: Bool = false
     @State private var ruler2D = GoldenRulerState()
     @State private var ruler3D = GoldenRulerState()
-    @State private var selectedRatioType: Int = 0 // Tracks picker selection
+    @State private var selectedRatioType: Int = 0
     
     // Smile Curve
     @State private var isDrawingCurve: Bool = false
@@ -125,6 +128,13 @@ struct SmileDesignView: View {
             Label("Analysis", systemImage: "scope").font(.headline)
             Toggle(isOn: $useStoneMaterial) { Label("Stone Mode", systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal") }.toggleStyle(.button)
             
+            Toggle(isOn: $isModelLocked) {
+                Label(isModelLocked ? "Unlock View" : "Lock View", systemImage: isModelLocked ? "lock.fill" : "lock.open.fill")
+            }
+            .toggleStyle(.button)
+            .tint(isModelLocked ? .red : .green)
+            .help("Lock camera to prevent accidental movement")
+            
             HStack {
                 Toggle(isOn: $isPlacingLandmarks) { Label("Place", systemImage: "target") }.toggleStyle(.button).disabled(landmarksLocked)
                 Toggle(isOn: $landmarksLocked) { Label("Locked", systemImage: landmarksLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(landmarksLocked ? .orange : .green)
@@ -138,7 +148,6 @@ struct SmileDesignView: View {
             if isRulerToolActive {
                 GroupBox("Ruler Settings") {
                     VStack {
-                        // Transparency Slider
                         HStack {
                             Image(systemName: "eye")
                             Slider(value: Binding(
@@ -147,20 +156,39 @@ struct SmileDesignView: View {
                             ), in: 0.1...1.0)
                         }
                         
-                        // Ratio Selector
                         Picker("Ratio", selection: Binding(
                             get: { selectedRatioType },
                             set: { val in
                                 selectedRatioType = val
-                                if val == 0 { ruler2D.setRatioType(.goldenRatio); ruler3D.setRatioType(.goldenRatio) }
-                                if val == 1 { ruler2D.setRatioType(.halves); ruler3D.setRatioType(.halves) }
-                                if val == 2 { ruler2D.setRatioType(.dentalWidths); ruler3D.setRatioType(.dentalWidths) }
+                                switch val {
+                                case 0:
+                                    ruler2D.setRatioType(.goldenRatio)
+                                    ruler3D.setRatioType(.goldenRatio)
+                                case 1:
+                                    ruler2D.setRatioType(.goldenPercentage)
+                                    ruler3D.setRatioType(.goldenPercentage)
+                                case 2:
+                                    ruler2D.setRatioType(.halves)
+                                    ruler3D.setRatioType(.halves)
+                                default:
+                                    break
+                                }
                             }
                         )) {
-                            Text("Golden Ratio").tag(0)
-                            Text("Halves").tag(1)
-                            Text("Dental").tag(2)
-                        }.pickerStyle(.segmented)
+                            Text("Golden Ratio (φ)").tag(0)
+                            Text("Golden %").tag(1)
+                            Text("Midline").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        
+                        Button(action: {
+                        }) {
+                            Label("Right-click ruler for Guide", systemImage: "info.circle")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
                 }
             }
@@ -214,6 +242,7 @@ struct SmileDesignView: View {
                             toothLibrary: toothAssignments, libraryID: libraryID,
                             isDrawingCurve: $isDrawingCurve, isCurveLocked: isCurveLocked, customCurvePoints: $customCurvePoints,
                             useStoneMaterial: useStoneMaterial,
+                            isModelLocked: isModelLocked,
                             onToothDrop: { toothID, fileURL in handleToothDrop(toothID: toothID, fileURL: fileURL) },
                             showReplaceAlert: $showReplaceAlert,
                             replaceAlertData: $replaceAlertData
@@ -265,5 +294,66 @@ struct SmileDesignView: View {
 
 // SUBVIEWS (Helpers)
 struct ToothPicker: View { @Binding var selection: URL?; let files: [URL]; var body: some View { Menu { ForEach(files, id: \.self) { file in Button(file.lastPathComponent) { selection = file } }; Divider(); Button("None (Procedural)") { selection = nil } } label: { HStack { Text(selection?.lastPathComponent ?? "Select File...").font(.caption).truncationMode(.middle); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.caption2) }.padding(4).background(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5))) }.menuStyle(.borderlessButton).frame(maxWidth: .infinity) } }
-struct ToothDropSlot: View { let label: String; @Binding var assignment: URL?; @State private var isTargeted: Bool = false; var body: some View { GridRow { Text(label).frame(width: 50, alignment: .leading); ZStack { RoundedRectangle(cornerRadius: 6).fill(isTargeted ? Color.blue.opacity(0.2) : Color.clear).stroke(isTargeted ? Color.blue : Color.gray.opacity(0.5), lineWidth: 1); HStack { if let url = assignment { Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle); Spacer(); Button(action: { assignment = nil }) { Image(systemName: "xmark.circle.fill").foregroundStyle(.gray) }.buttonStyle(.plain) } else { Text("Drop here...").font(.caption).foregroundStyle(.secondary); Spacer() } }.padding(4) }.frame(height: 24).dropDestination(for: URL.self) { items, _ in if let url = items.first { assignment = url; return true }; return false } isTargeted: { isTargeted = $0 } } } }
+
+// UPDATED: ToothDropSlot with Secure Copy
+struct ToothDropSlot: View {
+    let label: String
+    @Binding var assignment: URL?
+    @State private var isTargeted: Bool = false
+    
+    var body: some View {
+        GridRow {
+            Text(label).frame(width: 50, alignment: .leading)
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isTargeted ? Color.blue.opacity(0.2) : Color.clear)
+                    .stroke(isTargeted ? Color.blue : Color.gray.opacity(0.5), lineWidth: 1)
+                
+                HStack {
+                    if let url = assignment {
+                        Text(url.lastPathComponent).font(.caption).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button(action: { assignment = nil }) {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.gray)
+                        }.buttonStyle(.plain)
+                    } else {
+                        Text("Drop here...").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }.padding(4)
+            }
+            .frame(height: 24)
+            .dropDestination(for: URL.self) { items, _ in
+                // FIXED: Securely copy file to temp before assigning
+                if let url = items.first {
+                    if let safeUrl = secureCopy(url) {
+                        assignment = safeUrl
+                        return true
+                    }
+                }
+                return false
+            } isTargeted: { isTargeted = $0 }
+        }
+    }
+    
+    // Inline helper since we can't easily share the one from ToothDropHandler across modules here easily
+    // In a real app, move this to a shared Utils file.
+    private func secureCopy(_ url: URL) -> URL? {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        
+        do {
+            let fileManager = FileManager.default
+            let tempDir = fileManager.temporaryDirectory
+            let dst = tempDir.appendingPathComponent(url.lastPathComponent)
+            if fileManager.fileExists(atPath: dst.path) { try fileManager.removeItem(at: dst) }
+            try fileManager.copyItem(at: url, to: dst)
+            return dst
+        } catch {
+            print("❌ Slot Drop Copy Error: \(error.localizedDescription)")
+            return nil
+        }
+    }
+}
+
 struct ExportToolsView: View { @Binding var isExporting: Bool; @Binding var selectedFormat: GeometryUtils.ExportFormat; var body: some View { HStack { Picker("", selection: $selectedFormat) { Text("STL").tag(GeometryUtils.ExportFormat.stl); Text("USDZ").tag(GeometryUtils.ExportFormat.usdz) }.frame(width: 80); Button("Export") { isExporting = true }.buttonStyle(.borderedProminent) } } }

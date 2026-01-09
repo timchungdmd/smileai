@@ -10,29 +10,62 @@ class ToothDropHandler {
     }
     
     static func handleDrop(in view: SCNView, sender: NSDraggingInfo, curvePoints: [SCNVector3]) -> (target: DropTarget, url: URL)? {
-        guard let pasteboard = sender.draggingPasteboard.propertyList(forType: .fileURL) as? String,
-              let url = URL(string: pasteboard) else { return nil }
+        // 1. CRITICAL FIX: Use readObjects to preserve the Security Scope (The "Access Key")
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+              let originalUrl = urls.first else { return nil }
         
-        let ext = url.pathExtension.lowercased()
+        // 2. CRITICAL FIX: Securely copy the file to a temp location we own
+        // Without this, the app loses permission the moment the drop gesture ends.
+        guard let safeUrl = secureCopyToTemp(url: originalUrl) else {
+            print("❌ Failed to copy dropped file to temp storage.")
+            return nil
+        }
+        
+        let ext = safeUrl.pathExtension.lowercased()
         guard ["obj", "stl", "ply", "usdz", "scn"].contains(ext) else { return nil }
         
         let loc = view.convert(sender.draggingLocation, from: nil)
         
-        // 1. Check direct hit on existing tooth
+        // 3. Check direct hit on existing tooth
         let hitOptions: [SCNHitTestOption: Any] = [.searchMode: SCNHitTestSearchMode.closest.rawValue, .ignoreHiddenNodes: true]
         if let hit = view.hitTest(loc, options: hitOptions).first,
            let toothNode = findParentToothNode(from: hit.node) {
-            return (.existingTooth(toothNode.name!), url)
+            return (.existingTooth(toothNode.name!), safeUrl)
         }
         
-        // 2. Check "Magnetic" Snap to Curve
+        // 4. Check "Magnetic" Snap to Curve
         if !curvePoints.isEmpty, let snap = calculateSnapToCurve(view: view, location: loc, points: curvePoints) {
-            return (.curvePoint(snap.position, snap.rotation), url)
+            return (.curvePoint(snap.position, snap.rotation), safeUrl)
         }
         
-        return (.background, url)
+        return (.background, safeUrl)
     }
     
+    // MARK: - Secure File Handling
+    static func secureCopyToTemp(url: URL) -> URL? {
+        // A. Explicitly ask to use the "Access Key"
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        
+        // B. Perform the copy
+        do {
+            let fileManager = FileManager.default
+            let tempDir = fileManager.temporaryDirectory
+            let dst = tempDir.appendingPathComponent(url.lastPathComponent)
+            
+            if fileManager.fileExists(atPath: dst.path) {
+                try fileManager.removeItem(at: dst)
+            }
+            
+            try fileManager.copyItem(at: url, to: dst)
+            return dst
+        } catch {
+            print("❌ Error copying file during drop: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    
+    // MARK: - Geometry Logic (Unchanged)
     private static func calculateSnapToCurve(view: SCNView, location: CGPoint, points: [SCNVector3]) -> (position: SCNVector3, rotation: SCNVector4)? {
         guard points.count > 1 else { return nil }
         
@@ -64,7 +97,7 @@ class ToothDropHandler {
             }
         }
         
-        if minDistance < 0.05 { // 5cm snap threshold
+        if minDistance < 0.05 {
             let rotation = rotationFromTangent(bestTangent)
             return (bestPoint, rotation)
         }
@@ -83,13 +116,10 @@ class ToothDropHandler {
         let t = dot1 / dot2
         let closestOnRay = SCNVector3(rayOrigin.x + rayDir.x*t, rayOrigin.y + rayDir.y*t, rayOrigin.z + rayDir.z*t)
         
-        // Optimized: Distance squared calculation first to avoid sqrt if possible,
-        // but here we need actual dist for comparison. Using multiplication instead of pow().
         let dx = mid.x - closestOnRay.x
         let dy = mid.y - closestOnRay.y
         let dz = mid.z - closestOnRay.z
         
-        // Explicit CGFloat -> Float cast for safety
         let distSq = Float(dx*dx + dy*dy + dz*dz)
         return (mid, sqrt(distSq))
     }

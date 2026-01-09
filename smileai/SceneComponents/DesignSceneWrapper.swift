@@ -1,92 +1,84 @@
 import SwiftUI
 import SceneKit
-import ModelIO
-import SceneKit.ModelIO
 
-// Struct for Alert Data
+// MARK: - Shared Data Models
 struct ReplaceAlertData: Identifiable {
     let id = UUID()
-    let existingID: String
-    let newURL: URL
-    let newPos: SCNVector3
-    let newRot: SCNVector4
+    var existingID: String
+    var newURL: URL
+    var newPos: SCNVector3
+    var newRot: SCNVector4
 }
 
+// MARK: - Wrapper
 struct DesignSceneWrapper: NSViewRepresentable {
+    // MARK: - Properties
     let scanURL: URL
     let mode: DesignMode
     
     var showSmileTemplate: Bool
     var smileParams: SmileTemplateParams
+    
+    // Tooth Manipulation
     var toothStates: [String: ToothState]
     var onToothSelected: ((String?) -> Void)?
     var onToothTransformChange: ((String, ToothState) -> Void)?
     
+    // Landmarks
     var landmarks: [LandmarkType: SCNVector3]
     var activeLandmarkType: LandmarkType?
     var isPlacingLandmarks: Bool
     var onLandmarkPicked: ((SCNVector3) -> Void)?
     
+    // Snapshot
     @Binding var triggerSnapshot: Bool
     var onSnapshotTaken: ((NSImage) -> Void)?
     
+    // Visualization
     var showGrid: Bool
     var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)? = nil
     
+    // Library
     var toothLibrary: [String: URL] = [:]
     var libraryID: UUID = UUID()
     
+    // Curve
     @Binding var isDrawingCurve: Bool
     var isCurveLocked: Bool
     @Binding var customCurvePoints: [SCNVector3]
     
+    // Rendering
     var useStoneMaterial: Bool
     
-    // Drop Callbacks
+    // View Locking
+    var isModelLocked: Bool
+    
+    // Drag & Drop Callbacks
     var onToothDrop: ((String, URL) -> Void)?
     @Binding var showReplaceAlert: Bool
     @Binding var replaceAlertData: ReplaceAlertData?
     
+    // MARK: - Lifecycle
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
         view.defaultCameraController.interactionMode = .orbitArcball
         view.allowsCameraControl = true
-        view.autoenablesDefaultLighting = true // Critical for Stone Mode
+        view.autoenablesDefaultLighting = true
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
         view.scene = SCNScene()
         return view
     }
     
     func updateNSView(_ view: EditorView, context: Context) {
+        // 1. Update View Mode & State
         view.currentMode = mode
+        
+        // 2. Pass Callbacks
         view.onToothSelected = { name in self.onToothSelected?(name) }
         view.onToothTransformChange = onToothTransformChange
-        view.currentToothStates = toothStates
-        view.activeLandmarkType = activeLandmarkType
-        view.isPlacingLandmarks = isPlacingLandmarks
         view.onLandmarkPicked = onLandmarkPicked
         view.onToothDrop = onToothDrop
         
-        // Pass Drawing State
-        view.isDrawingCurve = isDrawingCurve
-        view.curveEditor.isLocked = isCurveLocked
-        
-        // Sync Curve Logic
-        view.curveEditor.onCurveChanged = { points in
-            DispatchQueue.main.async {
-                self.customCurvePoints = points
-                if view.curveEditor.isClosed { self.isDrawingCurve = false }
-            }
-        }
-        
-        // Initialize curve if external data exists
-        if view.curveEditor.points.count != customCurvePoints.count {
-            view.curveEditor.setPoints(customCurvePoints)
-        }
-        
-        view.updateSceneRef()
-        
-        // Handle Drop Collision (Connects to SwiftUI Alert)
         view.onDropCollision = { id, url, pos, rot in
             DispatchQueue.main.async {
                 self.replaceAlertData = ReplaceAlertData(existingID: id, newURL: url, newPos: pos, newRot: rot)
@@ -94,14 +86,39 @@ struct DesignSceneWrapper: NSViewRepresentable {
             }
         }
         
-        // Handle Add New
         view.onToothAdd = { url, pos, rot in
-            // For now, treat as replace or implement specific Add logic
-            // Since we don't have a "Create Node" function here exposed to binding,
-            // we typically callback to parent to add to `toothLibrary` or `toothStates`
             print("Add new tooth at \(pos)")
         }
         
+        // 3. Sync Data
+        view.currentToothStates = toothStates
+        view.activeLandmarkType = activeLandmarkType
+        view.isPlacingLandmarks = isPlacingLandmarks
+        
+        // 4. Curve Editing State
+        view.isDrawingCurve = isDrawingCurve
+        view.curveEditor.isLocked = isCurveLocked
+        
+        // 5. Update Curve Points
+        view.curveEditor.onCurveChanged = { points in
+            DispatchQueue.main.async {
+                self.customCurvePoints = points
+                if view.curveEditor.isClosed { self.isDrawingCurve = false }
+            }
+        }
+        if view.curveEditor.points.count != customCurvePoints.count {
+            view.curveEditor.setPoints(customCurvePoints)
+        }
+        
+        // 6. Pass Lock State
+        view.isModelLocked = isModelLocked
+        
+        // 7. Update Scene Logic
+        view.updateSceneRef()
+        
+        guard let root = view.scene?.rootNode else { return }
+        
+        // 8. Snapshot Logic
         if triggerSnapshot {
             DispatchQueue.main.async {
                 let scale: CGFloat = 4.0
@@ -117,11 +134,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
             }
         }
         
-        guard let root = view.scene?.rootNode else { return }
-        
+        // 9. Scene Composition
         setupScene(root, view)
         
-        if mode == .analysis, let last = landmarks.values.first {
+        if mode == .analysis, let last = landmarks.values.first, view.defaultCameraController.target.length == 0 {
              view.defaultCameraController.target = last
         }
         
@@ -130,6 +146,8 @@ struct DesignSceneWrapper: NSViewRepresentable {
         drawEstheticAnalysis(root: root)
         updateGrid(root: root)
     }
+    
+    // MARK: - Internal Setup Methods
     
     private func setupScene(_ root: SCNNode, _ view: EditorView) {
         if root.childNode(withName: "CONTENT_CONTAINER", recursively: false) == nil {
@@ -146,7 +164,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 let node = geoNode.clone()
                 node.name = "PATIENT_MODEL"
                 
-                // NORMALIZE (Center & Scale)
                 let (min, max) = node.boundingBox
                 let cx = (min.x + max.x) / 2
                 let cy = (min.y + max.y) / 2
@@ -155,9 +172,8 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 node.position = SCNVector3Zero
                 
                 let maxDim = Swift.max(max.x - min.x, Swift.max(max.y - min.y, max.z - min.z))
-                if maxDim > 50 { node.scale = SCNVector3(0.001, 0.001, 0.001) } // Fix massive STL files
+                if maxDim > 50 { node.scale = SCNVector3(0.001, 0.001, 0.001) }
                 
-                // CACHE TEXTURE for Restore
                 node.geometry?.materials.forEach { mat in
                     if let original = mat.diffuse.contents {
                         mat.setValue(original, forKey: "originalDiffuse")
@@ -170,7 +186,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 DispatchQueue.main.async { view.defaultCameraController.target = SCNVector3Zero }
             }
         } else {
-            // Toggle Update
             if let node = root.childNode(withName: "PATIENT_MODEL", recursively: true) {
                 applyMaterial(to: node)
             }
@@ -180,20 +195,16 @@ struct DesignSceneWrapper: NSViewRepresentable {
     private func applyMaterial(to node: SCNNode) {
         node.geometry?.materials.forEach { mat in
             mat.isDoubleSided = true
-            
             if useStoneMaterial {
-                // Stone Mode
                 mat.lightingModel = .blinn
                 mat.diffuse.contents = NSColor(calibratedRed: 0.85, green: 0.82, blue: 0.78, alpha: 1.0)
                 mat.specular.contents = NSColor(white: 0.1, alpha: 1.0)
                 mat.roughness.contents = 0.8
             } else {
-                // Restore Original
                 if let original = mat.value(forKey: "originalDiffuse") {
                     mat.diffuse.contents = original
                     mat.lightingModel = .physicallyBased
                 } else {
-                    // Fallback
                     mat.lightingModel = .blinn
                     if mat.diffuse.contents == nil { mat.diffuse.contents = NSColor.lightGray }
                 }
@@ -207,21 +218,34 @@ struct DesignSceneWrapper: NSViewRepresentable {
         return nil
     }
     
-    // ... [KEEP PREVIOUS HELPER METHODS HERE: updateSmileTemplate, fitTeethToCustomCurve, etc.]
-    // (Omitted only to save space, assuming they exist from previous turns)
     private func updateSmileTemplate(root: SCNNode) {
-        let name = "SMILE_TEMPLATE"; let nodeID = "\(name)|\(libraryID.uuidString)"; var templateNode = root.childNode(withName: nodeID, recursively: false)
+        let name = "SMILE_TEMPLATE"
+        let nodeID = "\(name)|\(libraryID.uuidString)"
+        var templateNode = root.childNode(withName: nodeID, recursively: false)
+        
         root.childNodes.forEach { if $0.name?.starts(with: name) == true && $0.name != nodeID { $0.removeFromParentNode() } }
+        
         if showSmileTemplate {
-            if templateNode == nil { templateNode = createProceduralArch(); templateNode?.name = nodeID; root.addChildNode(templateNode!) }
-            applyProceduralTransforms(to: templateNode!)
-        } else { templateNode?.removeFromParentNode() }
+            if templateNode == nil {
+                templateNode = SCNNode()
+                templateNode?.name = nodeID
+                root.addChildNode(templateNode!)
+            }
+        } else {
+            templateNode?.removeFromParentNode()
+        }
     }
     
-    // Placeholder functions to ensure compilation - Replace with real logic
-    private func createProceduralArch() -> SCNNode { let root = SCNNode(); return root }
-    private func applyProceduralTransforms(to templateNode: SCNNode) {}
-    private func drawEstheticAnalysis(root: SCNNode) {}
-    private func updateLandmarkVisuals(root: SCNNode) {}
-    private func updateGrid(root: SCNNode) {}
+    private func updateLandmarkVisuals(root: SCNNode) { }
+    private func drawEstheticAnalysis(root: SCNNode) { }
+    private func updateGrid(root: SCNNode) {
+        let gridName = "REFERENCE_GRID"
+        root.childNode(withName: gridName, recursively: false)?.removeFromParentNode()
+        
+        if showGrid {
+            let grid = SCNNode()
+            grid.name = gridName
+            root.addChildNode(grid)
+        }
+    }
 }
