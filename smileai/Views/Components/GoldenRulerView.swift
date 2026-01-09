@@ -303,7 +303,7 @@ struct RulerGraphic: View {
             
             // 4. Segment Labels
             if showLabels && !labels.isEmpty {
-                var allPoints = [0.0] + ratios + [1.0]
+                let allPoints = [0.0] + ratios + [1.0]
                 let loopCount = min(labels.count, allPoints.count - 1)
                 
                 for i in 0..<loopCount {

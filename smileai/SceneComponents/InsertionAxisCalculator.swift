@@ -239,14 +239,6 @@ class InsertionAxisCalculator {
         let worldMin = node.convertPosition(bounds.min, to: nil)
         let worldMax = node.convertPosition(bounds.max, to: nil)
         
-        // Calculate distance to AABB along ray
-        let rayOrigin = point
-        let rayEnd = SCNVector3(
-            point.x + direction.x * 0.1, // 100mm max
-            point.y + direction.y * 0.1,
-            point.z + direction.z * 0.1
-        )
-        
         // Simple AABB distance (could be refined with actual mesh intersection)
         let centerX = (worldMin.x + worldMax.x) / 2
         let centerY = (worldMin.y + worldMax.y) / 2

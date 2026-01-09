@@ -9,17 +9,16 @@ struct SmileDesignView: View {
     
     // MARK: - STATE
     @State private var currentMode: DesignMode = .analysis
-    @State private var landmarks3D: [LandmarkType: SCNVector3] = [:]
-    @State private var landmarks2D: [LandmarkType: CGPoint] = [:]
     @State private var facePhoto: NSImage?
     
     // Interaction
-    @State private var isPlacingLandmarks: Bool = false
-    @State private var landmarksLocked: Bool = false
     @State private var triggerSnapshot: Bool = false
     
-    // NEW: View Lock State
+    // View Lock State
     @State private var isModelLocked: Bool = false
+    
+    // MARK: - MANAGERS
+    @StateObject private var markerManager = AnatomicalMarkerManager()
     
     // Tools
     @State private var isRulerToolActive: Bool = false
@@ -61,11 +60,6 @@ struct SmileDesignView: View {
     @State private var isExporting = false; @State private var isExporting2D = false; @State private var isImporting3D = false; @State private var isImportingPhoto = false
     @State private var selectedFormat: GeometryUtils.ExportFormat = .stl
     
-    var nextLandmark: LandmarkType? {
-        let sequence: [LandmarkType] = [.rightPupil, .leftPupil, .glabella, .subnasale, .menton, .rightCommissure, .leftCommissure, .upperLipCenter, .lowerLipCenter, .midline, .rightCanine, .leftCanine]
-        return facePhoto != nil ? sequence.first(where: { landmarks2D[$0] == nil }) : sequence.first(where: { landmarks3D[$0] == nil })
-    }
-    
     var body: some View {
         HStack(spacing: 0) {
             sidebarView
@@ -94,7 +88,7 @@ struct SmileDesignView: View {
         .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in handleImportLibrary(res) }
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project3D") { _ in }
         .fileExporter(isPresented: $isExporting2D, document: ImageFile(image: render2DAnalysis()), contentType: .png, defaultFilename: "Analysis_Snapshot") { _ in }
-        .alert("Clear Workspace?", isPresented: $showDeleteConfirmation) { Button("Cancel", role: .cancel) { }; Button("Clear All", role: .destructive) { session.activeScanURL = nil; facePhoto = nil; landmarks2D.removeAll(); landmarks3D.removeAll(); toothAssignments.removeAll(); importedFiles.removeAll(); customCurvePoints.removeAll() } }
+        .alert("Clear Workspace?", isPresented: $showDeleteConfirmation) { Button("Cancel", role: .cancel) { }; Button("Clear All", role: .destructive) { session.activeScanURL = nil; facePhoto = nil; markerManager.reset(); toothAssignments.removeAll(); importedFiles.removeAll(); customCurvePoints.removeAll() } }
         .alert("Replace Tooth?", isPresented: $showReplaceAlert, presenting: replaceAlertData) { data in
             Button("Replace Existing") {
                 handleToothDrop(toothID: data.existingID, fileURL: data.newURL)
@@ -135,11 +129,36 @@ struct SmileDesignView: View {
             .tint(isModelLocked ? .red : .green)
             .help("Lock camera to prevent accidental movement")
             
-            HStack {
-                Toggle(isOn: $isPlacingLandmarks) { Label("Place", systemImage: "target") }.toggleStyle(.button).disabled(landmarksLocked)
-                Toggle(isOn: $landmarksLocked) { Label("Locked", systemImage: landmarksLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(landmarksLocked ? .orange : .green)
-            }.controlSize(.large).frame(maxWidth: .infinity)
+            // ANATOMICAL MARKERS
+            GroupBox("Anatomical Markers") {
+                VStack(alignment: .leading) {
+                    Text(markerManager.getCurrentPrompt(hasFacePhoto: facePhoto != nil))
+                        .font(.caption).bold().foregroundStyle(.blue)
+                    
+                    HStack {
+                        Toggle(isOn: $markerManager.isPlacingMode) {
+                            Label("Place", systemImage: "target")
+                        }
+                        .toggleStyle(.button)
+                        .disabled(markerManager.isLocked)
+                        
+                        Toggle(isOn: $markerManager.isLocked) {
+                            Image(systemName: markerManager.isLocked ? "lock.fill" : "lock.open.fill")
+                        }
+                        .toggleStyle(.button)
+                        .tint(markerManager.isLocked ? .orange : .green)
+                        
+                        Spacer()
+                        
+                        Button(action: { markerManager.undoLast(hasFacePhoto: facePhoto != nil) }) {
+                            Image(systemName: "arrow.uturn.backward")
+                        }
+                        .disabled(markerManager.isLocked)
+                    }
+                }
+            }
             
+            // RULER TOOLS
             HStack {
                 Toggle(isOn: $isRulerToolActive) { Label("Golden Ruler", systemImage: "ruler.fill") }.toggleStyle(.button).frame(maxWidth: .infinity).tint(.yellow)
                 Toggle(isOn: $isRulerLocked) { Image(systemName: isRulerLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isRulerLocked ? .red : .green).disabled(!isRulerToolActive)
@@ -162,39 +181,25 @@ struct SmileDesignView: View {
                                 selectedRatioType = val
                                 switch val {
                                 case 0:
-                                    ruler2D.setRatioType(.goldenRatio)
-                                    ruler3D.setRatioType(.goldenRatio)
+                                    ruler2D.setRatioType(.goldenRatio); ruler3D.setRatioType(.goldenRatio)
                                 case 1:
-                                    ruler2D.setRatioType(.goldenPercentage)
-                                    ruler3D.setRatioType(.goldenPercentage)
+                                    ruler2D.setRatioType(.goldenPercentage); ruler3D.setRatioType(.goldenPercentage)
                                 case 2:
-                                    ruler2D.setRatioType(.halves)
-                                    ruler3D.setRatioType(.halves)
-                                default:
-                                    break
+                                    ruler2D.setRatioType(.halves); ruler3D.setRatioType(.halves)
+                                default: break
                                 }
                             }
                         )) {
                             Text("Golden Ratio (φ)").tag(0)
                             Text("Golden %").tag(1)
                             Text("Midline").tag(2)
-                        }
-                        .pickerStyle(.segmented)
-                        
-                        Button(action: {
-                        }) {
-                            Label("Right-click ruler for Guide", systemImage: "info.circle")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
+                        }.pickerStyle(.segmented)
                     }
                 }
             }
             
             Button("Reset All") {
-                landmarks3D.removeAll(); landmarks2D.removeAll(); landmarksLocked = false
+                markerManager.reset()
                 ruler2D = GoldenRulerState(); ruler3D = GoldenRulerState()
                 selectedRatioType = 0
             }.buttonStyle(.bordered).controlSize(.small)
@@ -218,11 +223,18 @@ struct SmileDesignView: View {
             HStack(spacing: 2) {
                 if let image = facePhoto {
                     ZStack(alignment: .topTrailing) {
-                        PhotoAnalysisView(image: image, landmarks: $landmarks2D, isPlacing: isPlacingLandmarks, isLocked: landmarksLocked, activeType: nil)
-                            .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
-                            .background(Color.black)
+                        // FIXED: Added $ to markerManager.landmarks2D to pass binding
+                        PhotoAnalysisView(
+                            image: image,
+                            landmarks: $markerManager.landmarks2D,
+                            isPlacing: markerManager.isPlacingMode,
+                            isLocked: markerManager.isLocked,
+                            activeType: markerManager.nextLandmark(hasFacePhoto: true)
+                        )
+                        .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
+                        .background(Color.black)
                         
-                        Button(action: { facePhoto = nil; landmarks2D.removeAll() }) {
+                        Button(action: { facePhoto = nil; markerManager.landmarks2D.removeAll() }) {
                             Image(systemName: "trash.circle.fill").font(.title).foregroundStyle(.red)
                         }.buttonStyle(.plain).padding(10)
                     }.frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
@@ -235,8 +247,13 @@ struct SmileDesignView: View {
                             smileParams: SmileTemplateParams(posX: archPosX, posY: archPosY, posZ: archPosZ, scale: archWidth, curve: archCurve, length: toothLength, ratio: toothRatio),
                             toothStates: toothStates, onToothSelected: { selectedToothName = $0 },
                             onToothTransformChange: { id, newState in toothStates[id] = newState },
-                            landmarks: landmarks3D, activeLandmarkType: nil, isPlacingLandmarks: (isPlacingLandmarks && facePhoto == nil && !landmarksLocked),
-                            onLandmarkPicked: { pos in if let t = nextLandmark { landmarks3D[t] = pos } },
+                            
+                            // INTEGRATED MARKER MANAGER
+                            landmarks: markerManager.landmarks3D,
+                            activeLandmarkType: markerManager.nextLandmark(hasFacePhoto: false),
+                            isPlacingLandmarks: (markerManager.isPlacingMode && facePhoto == nil && !markerManager.isLocked),
+                            onLandmarkPicked: { pos in markerManager.addLandmark3D(pos) },
+                            
                             triggerSnapshot: $triggerSnapshot, onSnapshotTaken: { img in facePhoto = img },
                             showGrid: (currentMode == .design && showGoldenRatio),
                             toothLibrary: toothAssignments, libraryID: libraryID,
@@ -283,7 +300,7 @@ struct SmileDesignView: View {
     
     func bindingFor(_ key: String) -> Binding<URL?> { Binding(get: { toothAssignments[key] }, set: { if let url = $0 { toothAssignments[key] = url } else { toothAssignments.removeValue(forKey: key) }; libraryID = UUID() }) }
     
-    @MainActor func render2DAnalysis() -> NSImage? { guard let image = facePhoto else { return nil }; let renderer = ImageRenderer(content: PhotoAnalysisView(image: image, landmarks: $landmarks2D, isPlacing: false, isLocked: true, activeType: nil).overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D)).frame(width: image.size.width, height: image.size.height)); renderer.scale = 2.0; return renderer.nsImage }
+    @MainActor func render2DAnalysis() -> NSImage? { guard let image = facePhoto else { return nil }; let renderer = ImageRenderer(content: PhotoAnalysisView(image: image, landmarks: $markerManager.landmarks2D, isPlacing: false, isLocked: true, activeType: nil).overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D)).frame(width: image.size.width, height: image.size.height)); renderer.scale = 2.0; return renderer.nsImage }
     
     func handleImport3D(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent); try? FileManager.default.removeItem(at: dst); try? FileManager.default.copyItem(at: url, to: dst); DispatchQueue.main.async { session.activeScanURL = dst; statusMessage = "✅ Loaded" } } }
     
@@ -295,7 +312,6 @@ struct SmileDesignView: View {
 // SUBVIEWS (Helpers)
 struct ToothPicker: View { @Binding var selection: URL?; let files: [URL]; var body: some View { Menu { ForEach(files, id: \.self) { file in Button(file.lastPathComponent) { selection = file } }; Divider(); Button("None (Procedural)") { selection = nil } } label: { HStack { Text(selection?.lastPathComponent ?? "Select File...").font(.caption).truncationMode(.middle); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.caption2) }.padding(4).background(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5))) }.menuStyle(.borderlessButton).frame(maxWidth: .infinity) } }
 
-// UPDATED: ToothDropSlot with Secure Copy
 struct ToothDropSlot: View {
     let label: String
     @Binding var assignment: URL?
@@ -323,25 +339,23 @@ struct ToothDropSlot: View {
                 }.padding(4)
             }
             .frame(height: 24)
-            .dropDestination(for: URL.self) { items, _ in
-                // FIXED: Securely copy file to temp before assigning
-                if let url = items.first {
-                    if let safeUrl = secureCopy(url) {
-                        assignment = safeUrl
-                        return true
+            .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+                guard let provider = providers.first else { return false }
+                _ = provider.loadObject(ofClass: URL.self) { url, error in
+                    if let url = url {
+                        DispatchQueue.main.async {
+                            if let safeUrl = secureCopy(url) { assignment = safeUrl }
+                        }
                     }
                 }
-                return false
-            } isTargeted: { isTargeted = $0 }
+                return true
+            }
         }
     }
     
-    // Inline helper since we can't easily share the one from ToothDropHandler across modules here easily
-    // In a real app, move this to a shared Utils file.
     private func secureCopy(_ url: URL) -> URL? {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        
         do {
             let fileManager = FileManager.default
             let tempDir = fileManager.temporaryDirectory
@@ -349,10 +363,7 @@ struct ToothDropSlot: View {
             if fileManager.fileExists(atPath: dst.path) { try fileManager.removeItem(at: dst) }
             try fileManager.copyItem(at: url, to: dst)
             return dst
-        } catch {
-            print("❌ Slot Drop Copy Error: \(error.localizedDescription)")
-            return nil
-        }
+        } catch { return nil }
     }
 }
 

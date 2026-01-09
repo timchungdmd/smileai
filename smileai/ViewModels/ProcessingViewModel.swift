@@ -51,7 +51,7 @@ class ProcessingViewModel: ObservableObject {
                 
                 // FIX: Use MainActor-isolated task with userInitiated priority
                 if ["zip", "ar"].contains(url.pathExtension.lowercased()) {
-                    await self.log("📦 Decompressing Archive...")
+                    self.log("📦 Decompressing Archive...")
                     
                     // Run decompression on a high-priority background queue
                     inputRoot = try await withCheckedThrowingContinuation { continuation in
@@ -70,13 +70,13 @@ class ProcessingViewModel: ObservableObject {
                     throw NSError(domain: "App", code: 404, userInfo: [NSLocalizedDescriptionKey: "No valid images found."])
                 }
                 
-                await self.log("✂️ AI Analysis: Cropping to Face...")
+                self.log("✂️ AI Analysis: Cropping to Face...")
                 let croppedFolder = try await performSmartCrop(in: dataFolder, margin: 0.5)
                 
                 let validExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
                 let files = try FileManager.default.contentsOfDirectory(at: croppedFolder, includingPropertiesForKeys: nil)
                 let imageCount = files.filter { validExtensions.contains($0.pathExtension.lowercased()) }.count
-                await self.log("📸 Found \(imageCount) valid face images.")
+                self.log("📸 Found \(imageCount) valid face images.")
                 
                 guard imageCount >= 10 else {
                     throw NSError(domain: "App", code: 400, userInfo: [NSLocalizedDescriptionKey: "Need at least 10 images with detected faces."])
@@ -84,7 +84,7 @@ class ProcessingViewModel: ObservableObject {
                 
                 await runPhotogrammetry(inputFolder: croppedFolder, imageCount: imageCount)
                 try? FileManager.default.removeItem(at: croppedFolder)
-                await self.log("🧹 Cleaned up temporary files.")
+                self.log("🧹 Cleaned up temporary files.")
                 
             } catch {
                 await MainActor.run {
@@ -180,7 +180,7 @@ class ProcessingViewModel: ObservableObject {
                         self.state = .completed(url: outputURL)
                     }
                 case .requestError(_, let error):
-                    await self.log("⚠️ Warning: \(error.localizedDescription)")
+                    self.log("⚠️ Warning: \(error.localizedDescription)")
                 default:
                     break
                 }

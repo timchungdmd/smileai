@@ -74,10 +74,10 @@ class OcclusalAlignmentEngine {
         
         // 3. Iterative optimization
         var currentPos = crown.position
-        var currentRot = SCNVector4(0, 1, 0, 0)
+        let currentRot = SCNVector4(0, 1, 0, 0)
         var bestScore: Float = 0.0
         
-        for iteration in 0..<config.maxIterations {
+        for _ in 0..<config.maxIterations {
             // Calculate current score
             let score = evaluateAlignment(contacts: contacts)
             
@@ -120,7 +120,7 @@ class OcclusalAlignmentEngine {
         var contacts: [OcclusalContact] = []
         
         // Get crown geometry
-        guard let crownGeo = crown.geometry else { return contacts }
+        guard crown.geometry != nil else { return contacts }
         
         // Sample points on occlusal surface (top 20% of crown)
         let samplePoints = sampleOcclusalSurface(crown)
