@@ -294,9 +294,9 @@ extension ContactValidator {
         let results = validateSequence(contacts, teeth: teeth)
         
         var report: [String] = []
-        report.append("=" .repeating(count: 50))
+        report.append(String(repeating: "=", count: 50))
         report.append("CONTACT POINT VALIDATION REPORT")
-        report.append("=" .repeating(count: 50))
+        report.append(String(repeating: "=", count: 50))
         report.append("")
         
         let passCount = results.filter { $0.passed }.count
@@ -312,7 +312,7 @@ extension ContactValidator {
             report.append("")
         }
         
-        report.append("=" .repeating(count: 50))
+        report.append(String(repeating: "=", count: 50))
         
         return report.joined(separator: "\n")
     }

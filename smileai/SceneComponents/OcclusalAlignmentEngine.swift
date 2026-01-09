@@ -208,17 +208,6 @@ class OcclusalAlignmentEngine {
         target: SCNNode
     ) -> HitResult? {
         
-        // Create far point for ray
-        let rayLength: Float = 0.1 // 100mm max search distance
-        let endpoint = SCNVector3(
-            origin.x + direction.x * CGFloat(rayLength),
-            origin.y + direction.y * CGFloat(rayLength),
-            origin.z + direction.z * CGFloat(rayLength)
-        )
-        
-        // Perform hit test on target geometry
-        guard let scene = target.scene else { return nil }
-        
         // Manual intersection test (SceneKit's hitTest requires a view)
         // Simplified: check bounding box intersection
         let targetBounds = target.boundingBox

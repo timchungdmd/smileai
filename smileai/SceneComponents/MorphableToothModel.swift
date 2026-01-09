@@ -246,6 +246,7 @@ class MorphableToothModel {
         let preset = ToothMorphologyParams.preset(for: type)
         
         // Create a simple box as base topology
+        // Note: SCNBox doesn't support segmentCount, but chamferRadius provides subdivision
         let box = SCNBox(
             width: CGFloat(preset.width),
             height: CGFloat(preset.height),
@@ -253,7 +254,8 @@ class MorphableToothModel {
             chamferRadius: CGFloat(preset.width * 0.1)
         )
         
-        box.segmentCount = 8 // Enough for deformation
+        // Set higher chamfer segment count for smoother deformation
+        box.chamferSegmentCount = 8
         
         let node = SCNNode(geometry: box)
         return node
