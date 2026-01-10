@@ -10,19 +10,13 @@ struct SmileDesignView: View {
     // MARK: - STATE
     @State private var currentMode: DesignMode = .analysis
     @State private var facePhoto: NSImage?
-    
-    // Interaction
     @State private var triggerSnapshot: Bool = false
-    
-    // View Lock State
     @State private var isModelLocked: Bool = false
     
     // MARK: - MANAGERS
     @StateObject private var markerManager = AnatomicalMarkerManager()
-    
-    // NEW: Automation & Overlay State
     @StateObject private var automationManager = SmileAutomationManager()
-    @State private var smileOverlayState = SmileOverlayState()
+    @StateObject private var smileOverlayState = SmileOverlayState()
     
     // Tools
     @State private var isRulerToolActive: Bool = false
@@ -30,29 +24,19 @@ struct SmileDesignView: View {
     @State private var ruler2D = GoldenRulerState()
     @State private var ruler3D = GoldenRulerState()
     @State private var selectedRatioType: Int = 0
-    
-    // Smile Curve
     @State private var isDrawingCurve: Bool = false
     @State private var isCurveLocked: Bool = false
     @State private var customCurvePoints: [SCNVector3] = []
-    
-    // Visuals
     @State private var useStoneMaterial: Bool = false
-    
-    // Library / Drop
     @State private var isImportingLibrary: Bool = false
     @State private var importedFiles: [URL] = []
     @State private var toothAssignments: [String: URL] = [:]
     @State private var libraryID: UUID = UUID()
     @State private var isTargeted: Bool = false
-    
-    // Alerts
     @State private var showReplaceAlert = false
     @State private var replaceAlertData: ReplaceAlertData?
     @State private var showDeleteConfirmation = false
     @State private var statusMessage: String = ""
-    
-    // Design Params
     @State private var showGoldenRatio: Bool = false
     @State private var templateVisible: Bool = true
     @State private var toothStates: [String: ToothState] = [:]
@@ -60,9 +44,11 @@ struct SmileDesignView: View {
     @State private var archPosX: Float = 0.0; @State private var archPosY: Float = 0.0; @State private var archPosZ: Float = 0.05
     @State private var archWidth: Float = 1.0; @State private var archCurve: Float = 0.5
     @State private var toothLength: Float = 1.0; @State private var toothRatio: Float = 0.8
-    
     @State private var isExporting = false; @State private var isExporting2D = false; @State private var isImporting3D = false; @State private var isImportingPhoto = false
     @State private var selectedFormat: GeometryUtils.ExportFormat = .stl
+    
+    // Sheet State
+    @State private var show2DOverlaySheet = false
     
     var body: some View {
         HStack(spacing: 0) {
@@ -92,6 +78,12 @@ struct SmileDesignView: View {
         .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in handleImportLibrary(res) }
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project3D") { _ in }
         .fileExporter(isPresented: $isExporting2D, document: ImageFile(image: render2DAnalysis()), contentType: .png, defaultFilename: "Analysis_Snapshot") { _ in }
+        
+        // FIX: Use correct initializer for the sheet
+        .sheet(isPresented: $show2DOverlaySheet) {
+            Smile2DOverlaySheet(state: smileOverlayState, isPresented: $show2DOverlaySheet)
+        }
+        
         .alert("Clear Workspace?", isPresented: $showDeleteConfirmation) { Button("Cancel", role: .cancel) { }; Button("Clear All", role: .destructive) { session.activeScanURL = nil; facePhoto = nil; markerManager.reset(); toothAssignments.removeAll(); importedFiles.removeAll(); customCurvePoints.removeAll() } }
         .alert("Replace Tooth?", isPresented: $showReplaceAlert, presenting: replaceAlertData) { data in
             Button("Replace Existing") {
@@ -213,6 +205,19 @@ struct SmileDesignView: View {
     private var designToolsView: some View {
         VStack(alignment: .leading, spacing: 15) {
             Text("Smile Curve").font(.headline)
+            
+            // 2D Designer Button
+            Button(action: { show2DOverlaySheet = true }) {
+                HStack {
+                    Image(systemName: "pencil.and.outline")
+                    Text("Open 2D Designer")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            
+            Divider()
+            
             HStack { Toggle(isOn: $isDrawingCurve) { Label(isDrawingCurve ? "Drawing..." : "Draw Curve", systemImage: "pencil.and.outline") }.toggleStyle(.button).tint(.orange).disabled(isCurveLocked); Toggle(isOn: $isCurveLocked) { Image(systemName: isCurveLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isCurveLocked ? .red : .green); Spacer(); Button(role: .destructive) { customCurvePoints.removeAll(); isCurveLocked = false; isDrawingCurve = false } label: { Image(systemName: "trash") }.disabled(customCurvePoints.isEmpty) }
             Divider()
             HStack { Text("Library").font(.headline); Spacer(); Button(action: { history.undo() }) { Image(systemName: "arrow.uturn.backward") }.disabled(!history.canUndo); Button(action: { history.redo() }) { Image(systemName: "arrow.uturn.forward") }.disabled(!history.canRedo); Button(action: { isImportingLibrary = true }) { Image(systemName: "folder.badge.plus") }.buttonStyle(.plain) }
@@ -227,7 +232,7 @@ struct SmileDesignView: View {
                 Task {
                     let results = await automationManager.runAutoDesign(
                         overlayState: smileOverlayState,
-                        scanNode: nil, // Will be fetched via session in manager
+                        scanNode: nil,
                         antagonistNode: nil
                     )
                     
@@ -247,6 +252,11 @@ struct SmileDesignView: View {
             .buttonStyle(.borderedProminent)
             .tint(.blue)
             .disabled(automationManager.status != .idle)
+            
+            if case .optimizing(let progress) = automationManager.status {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+            }
         }
     }
     
@@ -294,7 +304,6 @@ struct SmileDesignView: View {
                             showReplaceAlert: $showReplaceAlert,
                             replaceAlertData: $replaceAlertData,
                             
-                            // PASSED TO BRIDGE
                             automationManager: automationManager
                         )
                         .id(url)
@@ -321,6 +330,11 @@ struct SmileDesignView: View {
         case .libraryItem(let url): handleImportLibrary(.success([url]))
         case .unknown: break
         }
+        
+        // Auto-load photo into overlay state if loaded
+        if let photo = facePhoto {
+            smileOverlayState.loadPhoto(photo)
+        }
     }
     
     private func handleDeleteKey() -> KeyPress.Result {
@@ -337,7 +351,19 @@ struct SmileDesignView: View {
     
     func handleImport3D(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent); try? FileManager.default.removeItem(at: dst); try? FileManager.default.copyItem(at: url, to: dst); DispatchQueue.main.async { session.activeScanURL = dst; statusMessage = "✅ Loaded" } } }
     
-    func handleImportPhoto(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; if let img = NSImage(contentsOf: url) { DispatchQueue.main.async { facePhoto = img; statusMessage = "✅ Loaded" } } } }
+    func handleImportPhoto(_ result: Result<URL, Error>) {
+        if case .success(let url) = result {
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
+            if let img = NSImage(contentsOf: url) {
+                DispatchQueue.main.async {
+                    facePhoto = img
+                    smileOverlayState.loadPhoto(img) // Sync 2D state
+                    statusMessage = "✅ Loaded"
+                }
+            }
+        }
+    }
     
     func handleImportLibrary(_ result: Result<[URL], Error>) { if case .success(let urls) = result { var foundFiles: [URL] = []; func scan(_ url: URL) { let start = url.startAccessingSecurityScopedResource(); defer { if start { url.stopAccessingSecurityScopedResource() } }; var isDir: ObjCBool = false; if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { if let c = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) { for f in c { scan(f) } } } else if url.pathExtension.lowercased() == "obj" { foundFiles.append(url) } }; for url in urls { scan(url) }; DispatchQueue.main.async { self.importedFiles = foundFiles; self.statusMessage = "✅ Loaded Lib" } } }
 }

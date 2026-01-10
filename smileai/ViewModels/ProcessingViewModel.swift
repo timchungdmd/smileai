@@ -44,20 +44,26 @@ class ProcessingViewModel: ObservableObject {
     
     func ingest(url: URL) {
         let access = url.startAccessingSecurityScopedResource()
-        
-        // FIX: Use .userInitiated priority for entire task chain
-        Task(priority: .userInitiated) { @MainActor in
+        // FIX: Explicitly set priority to userInitiated to avoid "Interactive waiting on Default" hang risk
+        Task(priority: .userInitiated) {
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             do {
                 var inputRoot = url
                 
-                // Decompression on background thread
                 if ["zip", "ar"].contains(url.pathExtension.lowercased()) {
                     self.log("📦 Decompressing Archive...")
                     
-                    inputRoot = try await Task.detached(priority: .userInitiated) {
-                        try ZipUtilities.unzip(fileURL: url)
-                    }.value
+                    // Run decompression on a high-priority background queue
+                    inputRoot = try await withCheckedThrowingContinuation { continuation in
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            do {
+                                let result = try ZipUtilities.unzip(fileURL: url)
+                                continuation.resume(returning: result)
+                            } catch {
+                                continuation.resume(throwing: error)
+                            }
+                        }
+                    }
                 }
                 
                 guard let dataFolder = ZipUtilities.findImageSource(in: inputRoot) else {
@@ -81,62 +87,59 @@ class ProcessingViewModel: ObservableObject {
                 self.log("🧹 Cleaned up temporary files.")
                 
             } catch {
-                self.state = .failed(error: error.localizedDescription)
-                self.log("Error: \(error.localizedDescription)")
+                await MainActor.run {
+                    self.state = .failed(error: error.localizedDescription)
+                    self.log("Error: \(error.localizedDescription)")
+                }
             }
         }
     }
     
-    // FIX: Use Task.detached with .userInitiated priority
-    private func performSmartCrop(in inputURL: URL, margin: CGFloat) async throws -> URL {
-        return try await Task.detached(priority: .userInitiated) {
-            let fileManager = FileManager.default
-            let tempDir = fileManager.temporaryDirectory.appendingPathComponent("SmartCrop_\(UUID().uuidString)")
-            try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    nonisolated private func performSmartCrop(in inputURL: URL, margin: CGFloat) async throws -> URL {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory.appendingPathComponent("SmartCrop_\(UUID().uuidString)")
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        let fileURLs = try fileManager.contentsOfDirectory(at: inputURL, includingPropertiesForKeys: nil)
+        let imageExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
+        let context = CIContext(options: [.cacheIntermediates: false])
+        
+        for fileURL in fileURLs {
+            if Task.isCancelled { break }
+            guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
+            guard let ciImage = CIImage(contentsOf: fileURL) else { continue }
             
-            let fileURLs = try fileManager.contentsOfDirectory(at: inputURL, includingPropertiesForKeys: nil)
-            let imageExtensions = ["heic", "heif", "jpg", "jpeg", "png"]
-            let context = CIContext(options: [.cacheIntermediates: false])
-            
-            for fileURL in fileURLs {
-                if Task.isCancelled { break }
-                guard imageExtensions.contains(fileURL.pathExtension.lowercased()) else { continue }
-                guard let ciImage = CIImage(contentsOf: fileURL) else { continue }
+            let request = VNDetectFaceRectanglesRequest()
+            let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
+            do {
+                try handler.perform([request])
+                guard let face = request.results?.sorted(by: {
+                    $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height
+                }).first else { continue }
                 
-                let request = VNDetectFaceRectanglesRequest()
-                let handler = VNImageRequestHandler(ciImage: ciImage, options: [:])
-                do {
-                    try handler.perform([request])
-                    guard let face = request.results?.sorted(by: {
-                        $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height
-                    }).first else { continue }
-                    
-                    let w = CGFloat(ciImage.extent.width)
-                    let h = CGFloat(ciImage.extent.height)
-                    let bbox = face.boundingBox
-                    let rect = CGRect(x: bbox.origin.x * w, y: bbox.origin.y * h, width: bbox.width * w, height: bbox.height * h)
-                    let insetX = -(rect.width * margin) / 2
-                    let insetY = -(rect.height * margin) / 2
-                    let cropRect = rect.insetBy(dx: insetX, dy: insetY).intersection(ciImage.extent)
-                    let croppedImage = ciImage.cropped(to: cropRect)
-                    let destURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
-                    
-                    if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
-                        try context.writeHEIFRepresentation(of: croppedImage, to: destURL, format: .RGBA8, colorSpace: colorSpace)
-                    }
-                } catch {
-                    print("Skipping \(fileURL.lastPathComponent)")
+                let w = CGFloat(ciImage.extent.width)
+                let h = CGFloat(ciImage.extent.height)
+                let bbox = face.boundingBox
+                let rect = CGRect(x: bbox.origin.x * w, y: bbox.origin.y * h, width: bbox.width * w, height: bbox.height * h)
+                let insetX = -(rect.width * margin) / 2
+                let insetY = -(rect.height * margin) / 2
+                let cropRect = rect.insetBy(dx: insetX, dy: insetY).intersection(ciImage.extent)
+                let croppedImage = ciImage.cropped(to: cropRect)
+                let destURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
+                
+                if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) {
+                    try context.writeHEIFRepresentation(of: croppedImage, to: destURL, format: .RGBA8, colorSpace: colorSpace)
                 }
+            } catch {
+                print("Skipping \(fileURL.lastPathComponent)")
             }
-            return tempDir
-        }.value
+        }
+        return tempDir
     }
     
     private func runPhotogrammetry(inputFolder: URL, imageCount: Int) async {
-        await MainActor.run {
-            self.startTime = Date()
-            self.log("🚀 Starting Reconstruction...")
-        }
+        self.startTime = Date()
+        self.log("🚀 Starting Reconstruction...")
         
         let tempDir = FileManager.default.temporaryDirectory
         let uniqueID = UUID().uuidString
@@ -155,43 +158,30 @@ class ProcessingViewModel: ObservableObject {
             
             let session = try PhotogrammetrySession(input: inputFolder, configuration: config)
             let request = PhotogrammetrySession.Request.modelFile(url: outputURL, detail: selectedDetailLevel)
+            try session.process(requests: [request])
             
-            // FIX: Process on background thread to avoid blocking
-            try await Task.detached(priority: .userInitiated) {
-                try session.process(requests: [request])
-            }.value
-            
-            // Monitor outputs
             for try await output in session.outputs {
                 switch output {
                 case .requestProgress(_, let fraction):
-                    await MainActor.run {
-                        let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
-                        self.state = .processing(progress: fraction, timeElapsed: elapsed)
-                        if Int(fraction * 100) % 10 == 0 {
-                            self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
-                        }
+                    let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
+                    self.state = .processing(progress: fraction, timeElapsed: elapsed)
+                    if Int(fraction * 100) % 10 == 0 {
+                        self.consoleLog = "Reconstructing: \(Int(fraction * 100))% | Time: \(Int(elapsed))s"
                     }
                 case .requestComplete(_, _):
-                    await MainActor.run {
-                        let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
-                        self.log("✨ Success in \(Int(elapsed))s!")
-                        self.currentModelURL = outputURL
-                        self.state = .completed(url: outputURL)
-                    }
+                    let elapsed = Date().timeIntervalSince(self.startTime ?? Date())
+                    self.log("✨ Success in \(Int(elapsed))s!")
+                    self.currentModelURL = outputURL
+                    self.state = .completed(url: outputURL)
                 case .requestError(_, let error):
-                    await MainActor.run {
-                        self.log("⚠️ Warning: \(error.localizedDescription)")
-                    }
+                    self.log("⚠️ Warning: \(error.localizedDescription)")
                 default:
                     break
                 }
             }
         } catch {
-            await MainActor.run {
-                self.state = .failed(error: error.localizedDescription)
-                self.log("❌ Failed: \(error.localizedDescription)")
-            }
+            self.state = .failed(error: error.localizedDescription)
+            self.log("❌ Failed: \(error.localizedDescription)")
         }
     }
     
@@ -199,8 +189,8 @@ class ProcessingViewModel: ObservableObject {
         guard let sourceURL = currentModelURL else { return }
         self.log("⚙️ Converting to STL...")
         
-        // FIX: Use .userInitiated priority
-        Task.detached(priority: .userInitiated) { @MainActor in
+        // FIX: Ensure export runs with userInitiated priority to prevent stalling
+        Task.detached(priority: .userInitiated) {
             do {
                 let asset = MDLAsset(url: sourceURL)
                 guard asset.count > 0 else {
