@@ -17,6 +17,10 @@ struct SmileDesignView: View {
     // View Lock State
     @State private var isModelLocked: Bool = false
     
+    // MARK: - 2D OVERLAY INTEGRATION (NEW)
+    @State private var show2DOverlay: Bool = false
+    @StateObject private var toothLibraryManager = ToothLibraryManager()
+    
     // MARK: - MANAGERS
     @StateObject private var markerManager = AnatomicalMarkerManager()
     
@@ -83,6 +87,16 @@ struct SmileDesignView: View {
                 handleDroppedContent(type)
             }
         }
+        // 2D OVERLAY SHEET INTEGRATION (NEW)
+        .sheet(isPresented: $show2DOverlay) {
+            Smile2DOverlaySheet(
+                sourcePhoto: facePhoto,
+                toothLibrary: toothLibraryManager,
+                onSave: { overlayImage in
+                    handleOverlaySave(overlayImage)
+                }
+            )
+        }
         .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj]) { res in handleImport3D(res) }
         .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in handleImportPhoto(res) }
         .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in handleImportLibrary(res) }
@@ -97,16 +111,50 @@ struct SmileDesignView: View {
         } message: { data in
             Text("Dropped near tooth \(data.existingID). Replace it?")
         }
+        .onAppear {
+            // Load tooth library on appear
+            loadToothLibrary()
+        }
     }
     
     // MARK: - SUBVIEWS
     private var sidebarView: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack { Text("Smile Studio").font(.title2).fontWeight(.bold); Spacer(); Button(action: { isImporting3D = true }) { Image(systemName: "cube") }.buttonStyle(.plain); Button(action: { isImportingPhoto = true }) { Image(systemName: "photo") }.buttonStyle(.plain).padding(.leading, 8) }.padding(.top)
+            HStack {
+                Text("Smile Studio").font(.title2).fontWeight(.bold)
+                Spacer()
+                Button(action: { isImporting3D = true }) {
+                    Image(systemName: "cube")
+                }
+                .buttonStyle(.plain)
+                Button(action: { isImportingPhoto = true }) {
+                    Image(systemName: "photo")
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 8)
+            }
+            .padding(.top)
+            
             Divider()
-            if session.activeScanURL == nil && facePhoto == nil { ContentUnavailableView { Label("Drag & Drop", systemImage: "arrow.down.doc") } description: { Text("Drop 3D models or Photos here.") }.frame(maxWidth: .infinity).background(isTargeted ? Color.blue.opacity(0.1) : Color.clear) } else {
-                Picker("Mode", selection: $currentMode) { ForEach(DesignMode.allCases) { mode in Text(mode.title).tag(mode) } }.pickerStyle(.segmented)
+            
+            if session.activeScanURL == nil && facePhoto == nil {
+                ContentUnavailableView {
+                    Label("Drag & Drop", systemImage: "arrow.down.doc")
+                } description: {
+                    Text("Drop 3D models or Photos here.")
+                }
+                .frame(maxWidth: .infinity)
+                .background(isTargeted ? Color.blue.opacity(0.1) : Color.clear)
+            } else {
+                Picker("Mode", selection: $currentMode) {
+                    ForEach(DesignMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                
                 Divider()
+                
                 switch currentMode {
                 case .analysis: analysisToolsView
                 case .design: designToolsView
@@ -120,7 +168,11 @@ struct SmileDesignView: View {
     private var analysisToolsView: some View {
         VStack(alignment: .leading, spacing: 15) {
             Label("Analysis", systemImage: "scope").font(.headline)
-            Toggle(isOn: $useStoneMaterial) { Label("Stone Mode", systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal") }.toggleStyle(.button)
+            
+            Toggle(isOn: $useStoneMaterial) {
+                Label("Stone Mode", systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal")
+            }
+            .toggleStyle(.button)
             
             Toggle(isOn: $isModelLocked) {
                 Label(isModelLocked ? "Unlock View" : "Lock View", systemImage: isModelLocked ? "lock.fill" : "lock.open.fill")
@@ -128,6 +180,40 @@ struct SmileDesignView: View {
             .toggleStyle(.button)
             .tint(isModelLocked ? .red : .green)
             .help("Lock camera to prevent accidental movement")
+            
+            // ========================================
+            // 2D OVERLAY BUTTON (NEW - PROMINENT PLACEMENT)
+            // ========================================
+            if facePhoto != nil {
+                Divider()
+                
+                GroupBox {
+                    VStack(spacing: 12) {
+                        Label("2D Smile Design", systemImage: "square.grid.2x2")
+                            .font(.headline)
+                            .foregroundColor(.accentColor)
+                        
+                        Text("Project 3D tooth library onto photo with interactive measurement grid")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        Button(action: { show2DOverlay = true }) {
+                            Label("Open 2D Overlay", systemImage: "square.on.square")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .help("Open interactive 2D smile design overlay editor")
+                    }
+                    .padding(8)
+                }
+                .background(Color.accentColor.opacity(0.05))
+                .cornerRadius(8)
+                
+                Divider()
+            }
+            // ========================================
             
             // ANATOMICAL MARKERS
             GroupBox("Anatomical Markers") {
@@ -160,8 +246,19 @@ struct SmileDesignView: View {
             
             // RULER TOOLS
             HStack {
-                Toggle(isOn: $isRulerToolActive) { Label("Golden Ruler", systemImage: "ruler.fill") }.toggleStyle(.button).frame(maxWidth: .infinity).tint(.yellow)
-                Toggle(isOn: $isRulerLocked) { Image(systemName: isRulerLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isRulerLocked ? .red : .green).disabled(!isRulerToolActive)
+                Toggle(isOn: $isRulerToolActive) {
+                    Label("Golden Ruler", systemImage: "ruler.fill")
+                }
+                .toggleStyle(.button)
+                .frame(maxWidth: .infinity)
+                .tint(.yellow)
+                
+                Toggle(isOn: $isRulerLocked) {
+                    Image(systemName: isRulerLocked ? "lock.fill" : "lock.open.fill")
+                }
+                .toggleStyle(.button)
+                .tint(isRulerLocked ? .red : .green)
+                .disabled(!isRulerToolActive)
             }
             
             if isRulerToolActive {
@@ -202,19 +299,103 @@ struct SmileDesignView: View {
                 markerManager.reset()
                 ruler2D = GoldenRulerState(); ruler3D = GoldenRulerState()
                 selectedRatioType = 0
-            }.buttonStyle(.bordered).controlSize(.small)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
     
     private var designToolsView: some View {
         VStack(alignment: .leading, spacing: 15) {
             Text("Smile Curve").font(.headline)
-            HStack { Toggle(isOn: $isDrawingCurve) { Label(isDrawingCurve ? "Drawing..." : "Draw Curve", systemImage: "pencil.and.outline") }.toggleStyle(.button).tint(.orange).disabled(isCurveLocked); Toggle(isOn: $isCurveLocked) { Image(systemName: isCurveLocked ? "lock.fill" : "lock.open.fill") }.toggleStyle(.button).tint(isCurveLocked ? .red : .green); Spacer(); Button(role: .destructive) { customCurvePoints.removeAll(); isCurveLocked = false; isDrawingCurve = false } label: { Image(systemName: "trash") }.disabled(customCurvePoints.isEmpty) }
+            HStack {
+                Toggle(isOn: $isDrawingCurve) {
+                    Label(isDrawingCurve ? "Drawing..." : "Draw Curve", systemImage: "pencil.and.outline")
+                }
+                .toggleStyle(.button)
+                .tint(.orange)
+                .disabled(isCurveLocked)
+                
+                Toggle(isOn: $isCurveLocked) {
+                    Image(systemName: isCurveLocked ? "lock.fill" : "lock.open.fill")
+                }
+                .toggleStyle(.button)
+                .tint(isCurveLocked ? .red : .green)
+                
+                Spacer()
+                
+                Button(role: .destructive) {
+                    customCurvePoints.removeAll()
+                    isCurveLocked = false
+                    isDrawingCurve = false
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(customCurvePoints.isEmpty)
+            }
+            
             Divider()
-            HStack { Text("Library").font(.headline); Spacer(); Button(action: { history.undo() }) { Image(systemName: "arrow.uturn.backward") }.disabled(!history.canUndo); Button(action: { history.redo() }) { Image(systemName: "arrow.uturn.forward") }.disabled(!history.canRedo); Button(action: { isImportingLibrary = true }) { Image(systemName: "folder.badge.plus") }.buttonStyle(.plain) }
-            if !importedFiles.isEmpty { List(importedFiles, id: \.self) { file in HStack { Image(systemName: "doc.text.fill").foregroundStyle(.blue); Text(file.lastPathComponent).font(.caption).lineLimit(1) }.draggable(file) }.frame(height: 100).listStyle(.bordered(alternatesRowBackgrounds: true)); Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) { ToothDropSlot(label: "Central", assignment: bindingFor("Central")); ToothDropSlot(label: "Lateral", assignment: bindingFor("Lateral")); ToothDropSlot(label: "Canine", assignment: bindingFor("Canine")) }.padding(8).background(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3))) } else { Button("Load Library Folder") { isImportingLibrary = true }.buttonStyle(.bordered).frame(maxWidth: .infinity) }
+            
+            HStack {
+                Text("Library").font(.headline)
+                Spacer()
+                Button(action: { history.undo() }) {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .disabled(!history.canUndo)
+                
+                Button(action: { history.redo() }) {
+                    Image(systemName: "arrow.uturn.forward")
+                }
+                .disabled(!history.canRedo)
+                
+                Button(action: { isImportingLibrary = true }) {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.plain)
+            }
+            
+            if !importedFiles.isEmpty {
+                List(importedFiles, id: \.self) { file in
+                    HStack {
+                        Image(systemName: "doc.text.fill").foregroundStyle(.blue)
+                        Text(file.lastPathComponent).font(.caption).lineLimit(1)
+                    }
+                    .draggable(file)
+                }
+                .frame(height: 100)
+                .listStyle(.bordered(alternatesRowBackgrounds: true))
+                
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
+                    ToothDropSlot(label: "Central", assignment: bindingFor("Central"))
+                    ToothDropSlot(label: "Lateral", assignment: bindingFor("Lateral"))
+                    ToothDropSlot(label: "Canine", assignment: bindingFor("Canine"))
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+            } else {
+                Button("Load Library Folder") {
+                    isImportingLibrary = true
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+            
             Divider()
-            DesignToolsView(templateVisible: $templateVisible, showGoldenRatio: $showGoldenRatio, selectedToothName: $selectedToothName, toothStates: $toothStates, archPosX: $archPosX, archPosY: $archPosY, archPosZ: $archPosZ, archWidth: $archWidth, archCurve: $archCurve, toothLength: $toothLength, toothRatio: $toothRatio)
+            
+            DesignToolsView(
+                templateVisible: $templateVisible,
+                showGoldenRatio: $showGoldenRatio,
+                selectedToothName: $selectedToothName,
+                toothStates: $toothStates,
+                archPosX: $archPosX,
+                archPosY: $archPosY,
+                archPosZ: $archPosZ,
+                archWidth: $archWidth,
+                archCurve: $archCurve,
+                toothLength: $toothLength,
+                toothRatio: $toothRatio
+            )
         }
     }
     
@@ -223,7 +404,6 @@ struct SmileDesignView: View {
             HStack(spacing: 2) {
                 if let image = facePhoto {
                     ZStack(alignment: .topTrailing) {
-                        // FIXED: Added $ to markerManager.landmarks2D to pass binding
                         PhotoAnalysisView(
                             image: image,
                             landmarks: $markerManager.landmarks2D,
@@ -234,30 +414,71 @@ struct SmileDesignView: View {
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
                         .background(Color.black)
                         
-                        Button(action: { facePhoto = nil; markerManager.landmarks2D.removeAll() }) {
-                            Image(systemName: "trash.circle.fill").font(.title).foregroundStyle(.red)
-                        }.buttonStyle(.plain).padding(10)
-                    }.frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
+                        // Action buttons overlay
+                        VStack(spacing: 8) {
+                            // 2D Overlay quick access button (NEW)
+                            Button(action: { show2DOverlay = true }) {
+                                VStack(spacing: 4) {
+                                    Image(systemName: "square.grid.2x2")
+                                        .font(.title2)
+                                    Text("2D Overlay")
+                                        .font(.caption2)
+                                }
+                                .padding(8)
+                                .background(Color.accentColor)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                                .shadow(radius: 4)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open 2D smile overlay editor")
+                            
+                            // Delete photo button
+                            Button(action: {
+                                facePhoto = nil
+                                markerManager.landmarks2D.removeAll()
+                            }) {
+                                Image(systemName: "trash.circle.fill")
+                                    .font(.title)
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(10)
+                    }
+                    .frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
                 
                 if let url = session.activeScanURL {
                     ZStack(alignment: .bottomTrailing) {
                         DesignSceneWrapper(
-                            scanURL: url, mode: currentMode, showSmileTemplate: (currentMode == .design && templateVisible),
-                            smileParams: SmileTemplateParams(posX: archPosX, posY: archPosY, posZ: archPosZ, scale: archWidth, curve: archCurve, length: toothLength, ratio: toothRatio),
-                            toothStates: toothStates, onToothSelected: { selectedToothName = $0 },
+                            scanURL: url,
+                            mode: currentMode,
+                            showSmileTemplate: (currentMode == .design && templateVisible),
+                            smileParams: SmileTemplateParams(
+                                posX: archPosX,
+                                posY: archPosY,
+                                posZ: archPosZ,
+                                scale: archWidth,
+                                curve: archCurve,
+                                length: toothLength,
+                                ratio: toothRatio
+                            ),
+                            toothStates: toothStates,
+                            onToothSelected: { selectedToothName = $0 },
                             onToothTransformChange: { id, newState in toothStates[id] = newState },
-                            
-                            // INTEGRATED MARKER MANAGER
                             landmarks: markerManager.landmarks3D,
                             activeLandmarkType: markerManager.nextLandmark(hasFacePhoto: false),
                             isPlacingLandmarks: (markerManager.isPlacingMode && facePhoto == nil && !markerManager.isLocked),
                             onLandmarkPicked: { pos in markerManager.addLandmark3D(pos) },
-                            
-                            triggerSnapshot: $triggerSnapshot, onSnapshotTaken: { img in facePhoto = img },
+                            triggerSnapshot: $triggerSnapshot,
+                            onSnapshotTaken: { img in facePhoto = img },
                             showGrid: (currentMode == .design && showGoldenRatio),
-                            toothLibrary: toothAssignments, libraryID: libraryID,
-                            isDrawingCurve: $isDrawingCurve, isCurveLocked: isCurveLocked, customCurvePoints: $customCurvePoints,
+                            toothLibrary: toothAssignments,
+                            libraryID: libraryID,
+                            isDrawingCurve: $isDrawingCurve,
+                            isCurveLocked: isCurveLocked,
+                            customCurvePoints: $customCurvePoints,
                             useStoneMaterial: useStoneMaterial,
                             isModelLocked: isModelLocked,
                             onToothDrop: { toothID, fileURL in handleToothDrop(toothID: toothID, fileURL: fileURL) },
@@ -268,49 +489,244 @@ struct SmileDesignView: View {
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler3D))
                         
                         Button(action: { triggerSnapshot = true }) {
-                            Image(systemName: "camera.viewfinder").font(.largeTitle).padding().background(Circle().fill(Color.white.opacity(0.8)))
-                        }.buttonStyle(.plain).padding()
-                    }.frame(width: facePhoto != nil ? geo.size.width * 0.5 : geo.size.width)
+                            Image(systemName: "camera.viewfinder")
+                                .font(.largeTitle)
+                                .padding()
+                                .background(Circle().fill(Color.white.opacity(0.8)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding()
+                    }
+                    .frame(width: facePhoto != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
                 
                 if facePhoto == nil && session.activeScanURL == nil {
-                    ContentUnavailableView("Drag & Drop", systemImage: "arrow.down.doc.fill").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ContentUnavailableView("Drag & Drop", systemImage: "arrow.down.doc.fill")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
     }
     
-    // LOGIC & HELPERS
+    // MARK: - 2D OVERLAY ACTIONS (NEW)
+    
+    private func handleOverlaySave(_ image: NSImage) {
+        print("✅ 2D Overlay saved")
+        
+        // Show save dialog
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.png, .jpeg]
+        savePanel.nameFieldStringValue = "smile_overlay_\(Date().timeIntervalSince1970).png"
+        savePanel.message = "Save annotated smile design"
+        
+        savePanel.begin { response in
+            guard response == .OK, let url = savePanel.url else { return }
+            
+            // Save image
+            if let tiffData = image.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiffData),
+               let pngData = bitmap.representation(using: .png, properties: [:]) {
+                
+                do {
+                    try pngData.write(to: url)
+                    statusMessage = "✅ 2D Overlay exported: \(url.lastPathComponent)"
+                    print("✅ Saved to: \(url.path)")
+                    
+                    // Show success notification
+                    let alert = NSAlert()
+                    alert.messageText = "Success"
+                    alert.informativeText = "2D smile overlay saved successfully!"
+                    alert.alertStyle = .informational
+                    alert.runModal()
+                    
+                } catch {
+                    print("❌ Failed to save: \(error)")
+                    
+                    let alert = NSAlert()
+                    alert.messageText = "Error"
+                    alert.informativeText = "Failed to save: \(error.localizedDescription)"
+                    alert.alertStyle = .critical
+                    alert.runModal()
+                }
+            }
+        }
+    }
+    
+    private func loadToothLibrary() {
+        // Load tooth library from imported files
+        guard !importedFiles.isEmpty else { return }
+        
+        do {
+            try toothLibraryManager.loadFromFolder(importedFiles)
+            print("✅ Tooth library loaded: \(importedFiles.count) files")
+        } catch {
+            print("❌ Failed to load tooth library: \(error)")
+        }
+    }
+    
+    // MARK: - EXISTING LOGIC & HELPERS
+    
     private func handleDroppedContent(_ type: DroppedContentType) {
         switch type {
-        case .model3D(let url): session.activeScanURL = url; statusMessage = "✅ Loaded Model"
-        case .facePhoto(let image): self.facePhoto = image; statusMessage = "✅ Loaded Photo"
-        case .libraryItem(let url): handleImportLibrary(.success([url]))
-        case .unknown: break
+        case .model3D(let url):
+            session.activeScanURL = url
+            statusMessage = "✅ Loaded Model"
+        case .facePhoto(let image):
+            self.facePhoto = image
+            statusMessage = "✅ Loaded Photo"
+        case .libraryItem(let url):
+            handleImportLibrary(.success([url]))
+        case .unknown:
+            break
         }
     }
     
     private func handleDeleteKey() -> KeyPress.Result {
-        if let name = selectedToothName { let old = toothStates[name] ?? ToothState(); history.pushCommand(ToothTransformCommand(toothID: name, oldState: old, newState: ToothState(), applyState: { id, s in toothStates[id] = s })); toothStates[name] = ToothState(); return .handled }
-        if !customCurvePoints.isEmpty { customCurvePoints.removeLast(); return .handled }
+        if let name = selectedToothName {
+            let old = toothStates[name] ?? ToothState()
+            history.pushCommand(ToothTransformCommand(
+                toothID: name,
+                oldState: old,
+                newState: ToothState(),
+                applyState: { id, s in toothStates[id] = s }
+            ))
+            toothStates[name] = ToothState()
+            return .handled
+        }
+        if !customCurvePoints.isEmpty {
+            customCurvePoints.removeLast()
+            return .handled
+        }
         return .ignored
     }
     
-    func handleToothDrop(toothID: String, fileURL: URL) { var typeKey = "Central"; if toothID.contains("2") { typeKey = "Lateral" } else if toothID.contains("3") { typeKey = "Canine" }; toothAssignments[typeKey] = fileURL; libraryID = UUID(); statusMessage = "✅ Replaced \(typeKey) Shape" }
+    func handleToothDrop(toothID: String, fileURL: URL) {
+        var typeKey = "Central"
+        if toothID.contains("2") {
+            typeKey = "Lateral"
+        } else if toothID.contains("3") {
+            typeKey = "Canine"
+        }
+        toothAssignments[typeKey] = fileURL
+        libraryID = UUID()
+        statusMessage = "✅ Replaced \(typeKey) Shape"
+        
+        // Reload library
+        loadToothLibrary()
+    }
     
-    func bindingFor(_ key: String) -> Binding<URL?> { Binding(get: { toothAssignments[key] }, set: { if let url = $0 { toothAssignments[key] = url } else { toothAssignments.removeValue(forKey: key) }; libraryID = UUID() }) }
+    func bindingFor(_ key: String) -> Binding<URL?> {
+        Binding(
+            get: { toothAssignments[key] },
+            set: {
+                if let url = $0 {
+                    toothAssignments[key] = url
+                } else {
+                    toothAssignments.removeValue(forKey: key)
+                }
+                libraryID = UUID()
+                loadToothLibrary()
+            }
+        )
+    }
     
-    @MainActor func render2DAnalysis() -> NSImage? { guard let image = facePhoto else { return nil }; let renderer = ImageRenderer(content: PhotoAnalysisView(image: image, landmarks: $markerManager.landmarks2D, isPlacing: false, isLocked: true, activeType: nil).overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D)).frame(width: image.size.width, height: image.size.height)); renderer.scale = 2.0; return renderer.nsImage }
+    @MainActor func render2DAnalysis() -> NSImage? {
+        guard let image = facePhoto else { return nil }
+        let renderer = ImageRenderer(content:
+            PhotoAnalysisView(
+                image: image,
+                landmarks: $markerManager.landmarks2D,
+                isPlacing: false,
+                isLocked: true,
+                activeType: nil
+            )
+            .overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D))
+            .frame(width: image.size.width, height: image.size.height)
+        )
+        renderer.scale = 2.0
+        return renderer.nsImage
+    }
     
-    func handleImport3D(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent); try? FileManager.default.removeItem(at: dst); try? FileManager.default.copyItem(at: url, to: dst); DispatchQueue.main.async { session.activeScanURL = dst; statusMessage = "✅ Loaded" } } }
+    func handleImport3D(_ result: Result<URL, Error>) {
+        if case .success(let url) = result {
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
+            let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: dst)
+            try? FileManager.default.copyItem(at: url, to: dst)
+            DispatchQueue.main.async {
+                session.activeScanURL = dst
+                statusMessage = "✅ Loaded"
+            }
+        }
+    }
     
-    func handleImportPhoto(_ result: Result<URL, Error>) { if case .success(let url) = result { guard url.startAccessingSecurityScopedResource() else { return }; defer { url.stopAccessingSecurityScopedResource() }; if let img = NSImage(contentsOf: url) { DispatchQueue.main.async { facePhoto = img; statusMessage = "✅ Loaded" } } } }
+    func handleImportPhoto(_ result: Result<URL, Error>) {
+        if case .success(let url) = result {
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
+            if let img = NSImage(contentsOf: url) {
+                DispatchQueue.main.async {
+                    facePhoto = img
+                    statusMessage = "✅ Loaded"
+                }
+            }
+        }
+    }
     
-    func handleImportLibrary(_ result: Result<[URL], Error>) { if case .success(let urls) = result { var foundFiles: [URL] = []; func scan(_ url: URL) { let start = url.startAccessingSecurityScopedResource(); defer { if start { url.stopAccessingSecurityScopedResource() } }; var isDir: ObjCBool = false; if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { if let c = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) { for f in c { scan(f) } } } else if url.pathExtension.lowercased() == "obj" { foundFiles.append(url) } }; for url in urls { scan(url) }; DispatchQueue.main.async { self.importedFiles = foundFiles; self.statusMessage = "✅ Loaded Lib" } } }
+    func handleImportLibrary(_ result: Result<[URL], Error>) {
+        if case .success(let urls) = result {
+            var foundFiles: [URL] = []
+            func scan(_ url: URL) {
+                let start = url.startAccessingSecurityScopedResource()
+                defer { if start { url.stopAccessingSecurityScopedResource() } }
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                    if let c = try? FileManager.default.contentsOfDirectory(
+                        at: url,
+                        includingPropertiesForKeys: nil
+                    ) {
+                        for f in c { scan(f) }
+                    }
+                } else if url.pathExtension.lowercased() == "obj" {
+                    foundFiles.append(url)
+                }
+            }
+            for url in urls { scan(url) }
+            DispatchQueue.main.async {
+                self.importedFiles = foundFiles
+                self.statusMessage = "✅ Loaded Lib"
+                self.loadToothLibrary()
+            }
+        }
+    }
 }
 
 // SUBVIEWS (Helpers)
-struct ToothPicker: View { @Binding var selection: URL?; let files: [URL]; var body: some View { Menu { ForEach(files, id: \.self) { file in Button(file.lastPathComponent) { selection = file } }; Divider(); Button("None (Procedural)") { selection = nil } } label: { HStack { Text(selection?.lastPathComponent ?? "Select File...").font(.caption).truncationMode(.middle); Spacer(); Image(systemName: "chevron.up.chevron.down").font(.caption2) }.padding(4).background(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5))) }.menuStyle(.borderlessButton).frame(maxWidth: .infinity) } }
+struct ToothPicker: View {
+    @Binding var selection: URL?
+    let files: [URL]
+    
+    var body: some View {
+        Menu {
+            ForEach(files, id: \.self) { file in
+                Button(file.lastPathComponent) { selection = file }
+            }
+            Divider()
+            Button("None (Procedural)") { selection = nil }
+        } label: {
+            HStack {
+                Text(selection?.lastPathComponent ?? "Select File...").font(.caption).truncationMode(.middle)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down").font(.caption2)
+            }
+            .padding(4)
+            .background(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5)))
+        }
+        .menuStyle(.borderlessButton)
+        .frame(maxWidth: .infinity)
+    }
+}
 
 struct ToothDropSlot: View {
     let label: String
@@ -367,4 +783,22 @@ struct ToothDropSlot: View {
     }
 }
 
-struct ExportToolsView: View { @Binding var isExporting: Bool; @Binding var selectedFormat: GeometryUtils.ExportFormat; var body: some View { HStack { Picker("", selection: $selectedFormat) { Text("STL").tag(GeometryUtils.ExportFormat.stl); Text("USDZ").tag(GeometryUtils.ExportFormat.usdz) }.frame(width: 80); Button("Export") { isExporting = true }.buttonStyle(.borderedProminent) } } }
+struct ExportToolsView: View {
+    @Binding var isExporting: Bool
+    @Binding var selectedFormat: GeometryUtils.ExportFormat
+    
+    var body: some View {
+        HStack {
+            Picker("", selection: $selectedFormat) {
+                Text("STL").tag(GeometryUtils.ExportFormat.stl)
+                Text("USDZ").tag(GeometryUtils.ExportFormat.usdz)
+            }
+            .frame(width: 80)
+            
+            Button("Export") {
+                isExporting = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+}

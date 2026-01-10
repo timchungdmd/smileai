@@ -227,7 +227,7 @@ class SmileOverlayState: ObservableObject {
     
     /// Reset transform to identity
     func resetTransform() {
-        let identity = SmileTransform2D()
+        var identity = SmileTransform2D()
         identity.center = smileTransform.center
         applyTransform(identity)
     }
@@ -267,50 +267,12 @@ class SmileOverlayState: ObservableObject {
         objectWillChange.send()
         return false
     }
-    
-    // MARK: - Export
-    
-    /// Export state to JSON
-    func exportState() -> Data? {
-        let export = ExportableState(
-            transform: smileTransform,
-            teeth: toothOverlays,
-            grid: measurementGrid,
-            calibration: cameraCalibration
-        )
-        
-        return try? JSONEncoder().encode(export)
-    }
-    
-    /// Import state from JSON
-    func importState(_ data: Data) {
-        guard let export = try? JSONDecoder().decode(ExportableState.self, from: data) else {
-            return
-        }
-        
-        smileTransform = export.transform
-        toothOverlays = export.teeth
-        measurementGrid = export.grid
-        cameraCalibration = export.calibration
-        
-        objectWillChange.send()
-    }
-}
-
-// MARK: - Exportable State
-
-/// Serializable state for save/load
-struct ExportableState: Codable {
-    var transform: SmileTransform2D
-    var teeth: [ToothOverlay2D]
-    var grid: MeasurementGrid
-    var calibration: CameraCalibrationData?
 }
 
 // MARK: - 2D Transform
 
 /// 2D Transform for entire smile design
-struct SmileTransform2D: Codable, Equatable {
+struct SmileTransform2D: Equatable {
     
     /// Translation offset in pixels
     var translation: CGPoint = .zero
@@ -442,13 +404,13 @@ struct SmileTransform2D: Codable, Equatable {
 
 // MARK: - Transform Handle Types
 
-enum TransformHandle: Equatable, Codable {
-    case center              // Move entire design
-    case corner              // Scale uniformly
-    case rotation            // Rotate around center
-    case edge(EdgeSide)      // Scale width or height
+enum TransformHandle: Equatable {
+    case center
+    case corner
+    case rotation
+    case edge(EdgeSide)
     
-    enum EdgeSide: String, Codable {
+    enum EdgeSide: String {
         case left
         case right
         case top
@@ -459,7 +421,7 @@ enum TransformHandle: Equatable, Codable {
 // MARK: - Camera Calibration Data
 
 /// Camera calibration parameters
-struct CameraCalibrationData: Codable, Equatable {
+struct CameraCalibrationData: Equatable {
     
     /// Focal length in millimeters
     var focalLength: Float
@@ -479,10 +441,10 @@ struct CameraCalibrationData: Codable, Equatable {
     static func estimate(from photo: NSImage) -> CameraCalibrationData {
         // Typical intraoral camera specs
         return CameraCalibrationData(
-            focalLength: 85.0,      // mm (macro lens)
-            sensorWidth: 36.0,      // mm (full frame)
-            distanceToSubject: 300.0, // mm (typical working distance)
-            angle: 0.1              // ~6 degrees downward tilt
+            focalLength: 85.0,
+            sensorWidth: 36.0,
+            distanceToSubject: 300.0,
+            angle: 0.1
         )
     }
     

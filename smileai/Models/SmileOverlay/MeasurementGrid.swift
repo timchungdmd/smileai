@@ -9,8 +9,8 @@
 import Foundation
 import SwiftUI
 
-/// Measurement grid configuration and annotations
-struct MeasurementGrid: Codable, Equatable {
+/// Measurement grid configuration and annotations (NO CODABLE - Color/CGPoint issues)
+struct MeasurementGrid: Equatable {
     
     // MARK: - Grid Properties
     
@@ -279,7 +279,7 @@ struct ReferenceLine: Identifiable, Equatable {
     var points: [CGPoint] = []
     var label: String
     
-    enum ReferenceType: String, Codable {
+    enum ReferenceType: String {
         case midline
         case occlusalPlane
         case pupillaryLine
@@ -309,8 +309,8 @@ struct ReferenceLine: Identifiable, Equatable {
 
 // MARK: - Measurement Annotation
 
-/// Measurement annotation (dimension, angle, note, etc.)
-struct MeasurementAnnotation: Identifiable, Codable, Equatable {
+/// Measurement annotation (dimension, angle, note, etc.) - NO CODABLE
+struct MeasurementAnnotation: Identifiable, Equatable {
     
     let id: UUID
     
@@ -353,7 +353,7 @@ struct MeasurementAnnotation: Identifiable, Codable, Equatable {
     
     // MARK: - Annotation Types
     
-    enum AnnotationType: String, Codable, CaseIterable {
+    enum AnnotationType: String, CaseIterable {
         case distance      // Point-to-point distance
         case angle         // Three-point angle
         case ratio         // Width ratio (e.g., golden ratio)

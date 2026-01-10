@@ -52,7 +52,7 @@ struct MeasurementOverlayView: View {
                 )
             )
             
-            // Draw labels
+            // Draw labels using resolve()
             if grid.showLabels && !line.label.isEmpty {
                 let labelPosition = calculateLabelPosition(for: line)
                 
@@ -60,16 +60,9 @@ struct MeasurementOverlayView: View {
                     .font(.system(size: grid.labelFontSize, design: .monospaced))
                     .foregroundColor(grid.lineColor)
                 
-                // Background for label
-                let bgRect = RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.black.opacity(0.6))
-                    .frame(width: 40, height: 16)
-                
-                var labelContext = context
-                labelContext.translateBy(x: labelPosition.x, y: labelPosition.y)
-                labelContext.draw(bgRect.offset(x: -20, y: -8), at: .zero)
-                
-                context.draw(labelText, at: labelPosition)
+                // Resolve the Text view and draw it
+                let resolved = context.resolve(labelText)
+                context.draw(resolved, at: labelPosition)
             }
         }
     }
@@ -122,7 +115,7 @@ struct MeasurementOverlayView: View {
             )
         )
         
-        // Draw label
+        // Draw label using resolve()
         if !line.label.isEmpty {
             let midPoint = CGPoint(
                 x: (line.start.x + line.end.x) / 2,
@@ -188,23 +181,20 @@ struct MeasurementOverlayView: View {
         in context: GraphicsContext,
         color: Color
     ) {
+        // Draw background rectangle using Path
+        let textWidth = CGFloat(text.count * 8 + 10)
+        let bgPath = RoundedRectangle(cornerRadius: 4)
+            .path(in: CGRect(x: position.x - textWidth/2, y: position.y - 10, width: textWidth, height: 20))
+        
+        context.fill(bgPath, with: .color(Color.black.opacity(0.8)))
+        
+        // Draw text using resolve()
         let label = Text(text)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundColor(color)
         
-        // Background
-        let bgRect = RoundedRectangle(cornerRadius: 4)
-            .fill(Color.black.opacity(0.8))
-            .frame(width: CGFloat(text.count * 8 + 10), height: 20)
-        
-        var labelContext = context
-        labelContext.translateBy(x: position.x, y: position.y - 10)
-        labelContext.draw(
-            bgRect.offset(x: -CGFloat(text.count * 4 + 5), y: 0),
-            at: .zero
-        )
-        
-        context.draw(label, at: CGPoint(x: position.x, y: position.y))
+        let resolved = context.resolve(label)
+        context.draw(resolved, at: position)
     }
     
     // MARK: - Annotations
@@ -251,26 +241,22 @@ struct MeasurementOverlayView: View {
             )
         )
         
-        // Draw endpoints
-        context.fill(
-            Circle().path(in: CGRect(
-                x: start.x - 4,
-                y: start.y - 4,
-                width: 8,
-                height: 8
-            )),
-            with: .color(color)
-        )
+        // Draw endpoints using Path
+        let startCircle = Circle().path(in: CGRect(
+            x: start.x - 4,
+            y: start.y - 4,
+            width: 8,
+            height: 8
+        ))
+        context.fill(startCircle, with: .color(color))
         
-        context.fill(
-            Circle().path(in: CGRect(
-                x: end.x - 4,
-                y: end.y - 4,
-                width: 8,
-                height: 8
-            )),
-            with: .color(color)
-        )
+        let endCircle = Circle().path(in: CGRect(
+            x: end.x - 4,
+            y: end.y - 4,
+            width: 8,
+            height: 8
+        ))
+        context.fill(endCircle, with: .color(color))
         
         // Draw label
         let midPoint = CGPoint(
@@ -387,16 +373,14 @@ struct MeasurementOverlayView: View {
         
         let color = annotation.color ?? .white
         
-        // Draw marker
-        context.fill(
-            Circle().path(in: CGRect(
-                x: position.x - 6,
-                y: position.y - 6,
-                width: 12,
-                height: 12
-            )),
-            with: .color(color)
-        )
+        // Draw marker using Path
+        let markerPath = Circle().path(in: CGRect(
+            x: position.x - 6,
+            y: position.y - 6,
+            width: 12,
+            height: 12
+        ))
+        context.fill(markerPath, with: .color(color))
         
         // Draw label
         drawAnnotationLabel(
@@ -453,21 +437,20 @@ struct MeasurementOverlayView: View {
         in context: GraphicsContext,
         color: Color
     ) {
+        // Draw background using Path
+        let textWidth = CGFloat(text.count * 7 + 8)
+        let bgPath = RoundedRectangle(cornerRadius: 4)
+            .path(in: CGRect(x: position.x - textWidth/2, y: position.y - 10, width: textWidth, height: 20))
+        
+        context.fill(bgPath, with: .color(Color.black.opacity(0.85)))
+        
+        // Draw text using resolve()
         let label = Text(text)
             .font(.system(size: 11, weight: .bold, design: .monospaced))
             .foregroundColor(color)
         
-        // Background
-        let textWidth = CGFloat(text.count * 7 + 8)
-        let bgRect = RoundedRectangle(cornerRadius: 4)
-            .fill(Color.black.opacity(0.85))
-            .frame(width: textWidth, height: 20)
-        
-        var labelContext = context
-        labelContext.translateBy(x: position.x, y: position.y)
-        labelContext.draw(bgRect.offset(x: -textWidth/2, y: -10), at: .zero)
-        
-        context.draw(label, at: position)
+        let resolved = context.resolve(label)
+        context.draw(resolved, at: position)
     }
 }
 

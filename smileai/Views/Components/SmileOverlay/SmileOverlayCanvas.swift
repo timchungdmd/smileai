@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Main interactive canvas for 2D smile design overlay
 struct SmileOverlayCanvas: View {
@@ -109,7 +110,7 @@ struct SmileOverlayCanvas: View {
             .onAppear {
                 canvasSize = geometry.size
             }
-            .onChange(of: geometry.size) { newSize in
+            .onChange(of: geometry.size) { oldSize, newSize in
                 canvasSize = newSize
             }
         }

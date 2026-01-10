@@ -108,7 +108,7 @@ struct ToothOverlayView: View {
         context.fill(backgroundPath, with: .color(Color.black.opacity(0.6)))
         
         // Draw label text
-        var resolvedText = context.resolve(labelText)
+        let resolvedText = context.resolve(labelText)
         context.draw(resolvedText, at: labelPosition)
     }
 }
@@ -206,7 +206,8 @@ struct AdvancedToothOverlayView: View {
             shadowContext.addFilter(.shadow(
                 color: .black.opacity(0.5),
                 radius: 2,
-                offset: CGSize(width: 1, height: 1)
+                x: 1,
+                y: 1
             ))
             
             shadowContext.stroke(
@@ -251,7 +252,7 @@ struct AdvancedToothOverlayView: View {
             .font(.system(size: 9, weight: .bold, design: .rounded))
             .foregroundColor(.white)
         
-        var resolvedText = context.resolve(labelText)
+        let resolvedText = context.resolve(labelText)
         context.draw(resolvedText, at: tooth.position)
     }
 }
