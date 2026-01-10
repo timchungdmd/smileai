@@ -8,6 +8,7 @@
 
 import SwiftUI
 import SceneKit
+import UniformTypeIdentifiers
 
 /// Main sheet view for 2D smile overlay functionality
 struct Smile2DOverlaySheet: View {
@@ -240,6 +241,9 @@ struct Smile2DOverlaySheet: View {
         isLoadingLibrary = true
         projectionQuality.removeAll()
         
+        // Capture values needed in async block
+        let photoSize = state.photoSize
+        
         // Perform projection on background queue
         DispatchQueue.global(qos: .userInitiated).async {
             // Create calibration
@@ -258,7 +262,7 @@ struct Smile2DOverlaySheet: View {
                     // Project to 2D
                     let tooth2D = projector.project(
                         tooth: tooth3D,
-                        toPhotoSize: state.photoSize
+                        toPhotoSize: photoSize
                     )
                     
                     // Assess quality
@@ -329,11 +333,7 @@ struct Smile2DOverlaySheet: View {
                     try pngData.write(to: url)
                     onSave(image)
                     
-                    // Success notification
-                    let notification = NSUserNotification()
-                    notification.title = "Export Complete"
-                    notification.informativeText = "Smile design saved to \(url.lastPathComponent)"
-                    NSUserNotificationCenter.default.deliver(notification)
+                    print("✅ Export complete: \(url.lastPathComponent)")
                 } catch {
                     print("Failed to save image: \(error)")
                 }

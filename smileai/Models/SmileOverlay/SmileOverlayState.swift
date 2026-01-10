@@ -9,6 +9,7 @@
 import Foundation
 import SwiftUI
 import SceneKit
+import Combine
 
 /// Main state container for the 2D smile overlay system
 @MainActor
