@@ -83,6 +83,17 @@ class ToothLibraryManager {
         
         return node
     }
+    func getAllTeeth() -> [SCNNode] {
+        var allTeeth: [SCNNode] = []
+        for type in ToothType.allCases {
+            if let tooth = instantiateTooth(type: type) {
+                allTeeth.append(tooth)
+            }
+        }
+        return allTeeth
+    }
+    // Add this method after instantiateTooth():
+
     
     private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
         if node.geometry != nil { return node }
