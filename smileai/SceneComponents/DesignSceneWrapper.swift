@@ -59,6 +59,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
     @Binding var replaceAlertData: ReplaceAlertData?
     
     // MARK: - Lifecycle
+    @ObservedObject var automationManager: SmileAutomationManager
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
         view.defaultCameraController.interactionMode = .orbitArcball
@@ -67,6 +68,11 @@ struct DesignSceneWrapper: NSViewRepresentable {
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
         view.scene = SCNScene()
         return view
+        DispatchQueue.main.async {
+                    self.automationManager.projectionDelegate = { points in
+                        return view.project2DPointsTo3D(points: points)
+                    }
+                }
     }
     
     func updateNSView(_ view: EditorView, context: Context) {

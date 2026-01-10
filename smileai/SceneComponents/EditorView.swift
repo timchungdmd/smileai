@@ -209,7 +209,41 @@ class EditorView: SCNView {
         }
         return true
     }
-    
+    // In smileai/SceneComponents/EditorView.swift
+
+    // ... inside EditorView class ...
+
+    // MARK: - API for Automation Manager
+    func project2DPointsTo3D(points: [CGPoint]) -> [SCNVector3] {
+        guard let patientNode = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) else {
+            print("⚠️ No Patient Model found for projection")
+            return points.map { _ in SCNVector3Zero }
+        }
+        
+        var results: [SCNVector3] = []
+        
+        let options: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.closest.rawValue,
+            .rootNode: patientNode,
+            .ignoreHiddenNodes: true
+        ]
+        
+        for point in points {
+            // Perform hit test against the patient mesh
+            let hits = self.hitTest(point, options: options)
+            
+            if let firstHit = hits.first {
+                // Found a surface point!
+                results.append(firstHit.worldCoordinates)
+            } else {
+                // Fallback: Project onto a plane at Z=0 (or average depth) if missed
+                let projected = self.unprojectPoint(SCNVector3(point.x, point.y, 0.1)) // Arbitrary depth
+                results.append(projected)
+            }
+        }
+        
+        return results
+    }
     // MARK: - Helpers
     private func selectTooth(_ node: SCNNode) {
         selectedToothNode = node
