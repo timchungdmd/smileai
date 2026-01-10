@@ -5,6 +5,7 @@ import Combine
 @MainActor
 class SmileAutomationManager: ObservableObject {
     
+    // MARK: - State
     enum Status: Equatable {
         case idle
         case projecting
@@ -15,7 +16,8 @@ class SmileAutomationManager: ObservableObject {
     @Published var status: Status = .idle
     @Published var errorMessage: String?
     
-    // MARK: - Delegates
+    // MARK: - Delegates (The "Glue")
+    // The ViewWrapper will assign this closure to allow us to talk to the SCNView
     var projectionDelegate: ((_ points: [CGPoint]) -> [SCNVector3])?
     
     // MARK: - Dependencies
@@ -31,11 +33,12 @@ class SmileAutomationManager: ObservableObject {
         
         self.status = .projecting
         
-        // 1. Gather 2D centers from the overlay using the calculated transforms
+        // 1. Gather 2D centers from the overlay
+        // FIX: Use 'transformedTeeth' array to get positions
         let activeTeeth = overlayState.transformedTeeth
         let points2D = activeTeeth.map { $0.position }
         
-        // 2. Call the Bridge
+        // 2. Call the Bridge (Project to 3D)
         guard let projector = projectionDelegate, !points2D.isEmpty else {
             self.errorMessage = "Projection Bridge not connected or no teeth placed"
             self.status = .idle
@@ -47,36 +50,44 @@ class SmileAutomationManager: ObservableObject {
         // 3. Instantiate & Optimize in Background
         self.status = .optimizing(progress: 0.0)
         
-        // Run heavy math off the main thread
+        // FIX: Store task in a variable to avoid compiler confusion regarding 'await'
         let task = Task.detached(priority: .userInitiated) {
             var newStates: [String: ToothState] = [:]
             
             for (index, tooth) in activeTeeth.enumerated() {
+                // Ensure we don't go out of bounds if projection failed for some points
                 guard index < points3D.count else { break }
                 
                 let targetPos = points3D[index]
-                let initialRotation = SCNVector4(0, 1, 0, 0)
+                let toothID = tooth.toothNumber
                 
-                // Here we map the 2D "toothNumber" (e.g. "11") to the 3D state key
-                // Assuming ToothOverlay2D has a 'toothNumber' or 'id' property we can use
-                // If using UUID, we might need a mapping strategy.
-                // For now, we assume toothNumber matches standard string keys.
-                let key = tooth.toothNumber
+                // FIX: Explicitly cast CGFloat (SCNVector3) to Float (SIMD3)
+                // This is required because SCNVector3 uses CGFloat on macOS but SIMD3<Float> requires Float
+                let x = Float(targetPos.x)
+                let y = Float(targetPos.y)
+                let z = Float(targetPos.z)
                 
+                // Create State using SIMD3<Float>
                 let state = ToothState(
-                    position: targetPos,
-                    rotation: initialRotation,
-                    scale: SCNVector3(1, 1, 1),
-                    visible: true
+                    positionOffset: SIMD3<Float>(x, y, z),
+                    rotation: SIMD3<Float>(0, 0, 0), // Default zero rotation
+                    scale: SIMD3<Float>(1, 1, 1)     // Default scale
                 )
                 
-                newStates[key] = state
+                newStates[toothID] = state
             }
+            
             return newStates
         }
         
+        // Await the result of the task
         let result = await task.value
+        
         self.status = .idle
         return result
+    }
+    
+    func applyOptimization() {
+        self.status = .idle
     }
 }

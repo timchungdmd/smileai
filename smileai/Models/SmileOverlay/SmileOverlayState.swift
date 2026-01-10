@@ -56,9 +56,17 @@ class SmileOverlayState: ObservableObject {
     var transformedTeeth: [ToothOverlay2D] {
         return toothOverlays.map { tooth in
             var transformed = tooth
+            
+            // Apply global transform to properties
             transformed.position = smileTransform.apply(to: tooth.position)
             transformed.rotation += smileTransform.rotation
             transformed.scale *= smileTransform.scale
+            
+            // Apply global transform to points
+            if !transformed.outlinePoints.isEmpty {
+                transformed.outlinePoints = transformed.outlinePoints.map { smileTransform.apply(to: $0) }
+            }
+            
             return transformed
         }
     }
@@ -111,16 +119,10 @@ class SmileOverlayState: ObservableObject {
     
     // Select tooth at point
     func selectTooth(at point: CGPoint) -> Bool {
-        // Simple hit test logic
+        // Iterate in reverse (front-to-back) for intuitive selection
         for tooth in transformedTeeth.reversed() {
-            // Approximation for hit testing
-            let rect = CGRect(
-                x: tooth.position.x - tooth.scale.width/2,
-                y: tooth.position.y - tooth.scale.height/2,
-                width: tooth.scale.width,
-                height: tooth.scale.height
-            )
-            if rect.contains(point) {
+            // FIX: Use boundingRect instead of manually constructing rect from CGFloat scale
+            if tooth.boundingRect.contains(point) {
                 selectedToothID = tooth.id
                 return true
             }

@@ -43,7 +43,7 @@ struct Smile2DOverlaySheet: View {
                 libraryScrollView
             }
             .navigationTitle("2D Smile Design")
-            .navigationBarTitleDisplayMode(.inline)
+            // FIX: Removed .navigationBarTitleDisplayMode(.inline) as it is iOS-only
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { isPresented = false }
@@ -102,13 +102,21 @@ struct Smile2DOverlaySheet: View {
     // MARK: - Logic
     
     private func addTooth(_ type: ToothType) {
+        // Get standard dimensions for this tooth type
+        let dimensions = type.typicalDimensions
+        
         // Safely add tooth on MainActor
+        // FIX: Added missing arguments (toothType, width, height)
+        // FIX: Changed scale from CGSize to CGFloat (1.0)
         let tooth = ToothOverlay2D(
             id: UUID(),
-            toothNumber: type.rawValue, // Maps "central" -> "central"
+            toothNumber: type.rawValue,
+            toothType: type,
             position: CGPoint(x: state.photoSize.width/2, y: state.photoSize.height/2),
             rotation: 0,
-            scale: CGSize(width: 100, height: 100) // Default size
+            scale: 1.0,
+            width: dimensions.width,
+            height: dimensions.height
         )
         state.addTooth(tooth)
     }
