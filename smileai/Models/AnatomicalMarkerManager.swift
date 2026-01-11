@@ -1,5 +1,5 @@
 import SwiftUI
-import Combine // CRITICAL: Required for ObservableObject
+import Combine
 import SceneKit
 
 class AnatomicalMarkerManager: ObservableObject {
@@ -11,10 +11,19 @@ class AnatomicalMarkerManager: ObservableObject {
     @Published var isPlacingMode: Bool = false
     @Published var isLocked: Bool = false
     
-    // MARK: - Sequence Definition
+    // MARK: - Sequence Definition (Updated with new markers)
     private let placementSequence: [LandmarkType] = [
-        .rightPupil, .leftPupil, .glabella, .subnasale, .menton,
+        // Eyes
+        .rightPupil, .leftPupil, .glabella, .nasion,
+        // Ears
+        .rightTragus, .leftTragus,
+        // Midface
+        .rightZygoma, .leftZygoma, .subnasale, .rightAla, .leftAla,
+        // Mouth
         .rightCommissure, .leftCommissure, .upperLipCenter, .lowerLipCenter,
+        // Chin
+        .menton, .pogonion,
+        // Teeth
         .midline, .rightCanine, .leftCanine
     ]
     
@@ -29,8 +38,7 @@ class AnatomicalMarkerManager: ObservableObject {
     
     func getCurrentPrompt(hasFacePhoto: Bool) -> String {
         if let next = nextLandmark(hasFacePhoto: hasFacePhoto) {
-            let name = next.rawValue.capitalized.replacingOccurrences(of: "_", with: " ")
-            return "Place: \(name)"
+            return "Place: \(next.rawValue)"
         }
         return "All Markers Placed"
     }

@@ -1,19 +1,63 @@
 import Foundation
+import SwiftUI
 import SceneKit
 
 enum LandmarkType: String, CaseIterable, Codable {
+    // Eyes & Upper Face (Blue/Purple)
     case rightPupil = "Right Pupil"
     case leftPupil = "Left Pupil"
-    case glabella = "Glabella (Brows)"
-    case subnasale = "Subnasale (Nose Base)"
-    case menton = "Menton (Chin Tip)"
-    case rightCommissure = "Right Mouth Corner"
-    case leftCommissure = "Left Mouth Corner"
+    case glabella = "Glabella"
+    case nasion = "Nasion (Root)" // NEW
+    
+    // Mid Face (Yellow/Orange)
+    case subnasale = "Subnasale (Base)"
+    case rightAla = "Right Ala" // NEW
+    case leftAla = "Left Ala" // NEW
+    case rightZygoma = "Right Zygoma" // NEW
+    case leftZygoma = "Left Zygoma" // NEW
+    
+    // Ears (Green)
+    case rightTragus = "Right Tragus" // NEW
+    case leftTragus = "Left Tragus" // NEW
+    
+    // Lower Face & Lips (Red/Pink)
     case upperLipCenter = "Upper Lip Center"
     case lowerLipCenter = "Lower Lip Center"
+    case rightCommissure = "R. Mouth Corner"
+    case leftCommissure = "L. Mouth Corner"
+    case menton = "Menton (Chin)"
+    case pogonion = "Pogonion (Chin Proj)" // NEW
+    
+    // Teeth (Cyan/White)
     case midline = "Dental Midline"
-    case leftCanine = "Left Canine Tip"
-    case rightCanine = "Right Canine Tip"
+    case rightCanine = "Right Canine"
+    case leftCanine = "Left Canine"
+    
+    /// Distinct color for each landmark group
+    var color: Color {
+        switch self {
+        case .rightPupil, .leftPupil: return .blue
+        case .glabella, .nasion: return .purple
+            
+        case .subnasale, .rightAla, .leftAla: return .yellow
+        case .rightZygoma, .leftZygoma: return .orange
+            
+        case .rightTragus, .leftTragus: return .green
+            
+        case .upperLipCenter, .lowerLipCenter: return .pink
+        case .rightCommissure, .leftCommissure: return .red
+        case .menton, .pogonion: return .brown
+            
+        case .midline, .rightCanine, .leftCanine: return .cyan
+        }
+    }
+    
+    /// Helper for SceneKit conversion
+    #if os(macOS)
+    var nsColor: NSColor { NSColor(color) }
+    #else
+    var uiColor: UIColor { UIColor(color) }
+    #endif
 }
 
 enum DesignMode: Int, CaseIterable, Identifiable {
@@ -43,14 +87,5 @@ struct OcclusalPlane {
         let normal = v1.cross(v2).normalized
         
         return OcclusalPlane(origin: g, normal: normal)
-    }
-    
-    func transformMatrix() -> SCNMatrix4 {
-        let up = SCNVector3(0, 1, 0)
-        let axis = up.cross(normal).normalized
-        let angle = acos(up.dot(normal))
-        
-        // FIX: Cast Float to CGFloat
-        return SCNMatrix4MakeRotation(CGFloat(angle), CGFloat(axis.x), CGFloat(axis.y), CGFloat(axis.z))
     }
 }

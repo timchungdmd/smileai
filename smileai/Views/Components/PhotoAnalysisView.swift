@@ -27,7 +27,6 @@ struct PhotoAnalysisView: View {
                     .scaleEffect(currentMagnification)
                     .offset(position + dragOffset)
                     .gesture(
-                        // Pan Gesture
                         DragGesture()
                             .onChanged { value in
                                 if !isLocked {
@@ -42,7 +41,6 @@ struct PhotoAnalysisView: View {
                             }
                     )
                     .gesture(
-                        // Zoom Gesture (Magnification)
                         MagnificationGesture()
                             .onChanged { value in
                                 if !isLocked {
@@ -50,17 +48,10 @@ struct PhotoAnalysisView: View {
                                 }
                             }
                     )
-                    // FIX: Add Tap Gesture to detect clicks on image
                     .onTapGesture { location in
-                        // Convert location if necessary based on zoom/pan
-                        // For simplicity in this view, we pass the raw location relative to the view
-                        // Ideally, we inverse transform to get image coordinates.
-                        // Here we assume the parent handles coordinate mapping or use normalized coords.
-                        
                         if let callback = onTap {
                             callback(location)
                         } else if isPlacing, let type = activeType, !isLocked {
-                            // Default landmark placement behavior if no custom tap handler
                             landmarks[type] = location
                         }
                     }
@@ -92,7 +83,8 @@ struct LandmarkPointView: View {
     
     var body: some View {
         Circle()
-            .fill(Color.green)
+            // FIX: Use specific color
+            .fill(type.color)
             .frame(width: 10, height: 10)
             .position(
                 x: point.x * zoom + offset.width,

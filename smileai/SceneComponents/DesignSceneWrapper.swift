@@ -254,19 +254,17 @@ struct DesignSceneWrapper: NSViewRepresentable {
         }
     }
     
-    // FIX: Implemented this function to draw the markers
+    // FIX: Updated to use dynamic colors from LandmarkType
     private func updateLandmarkVisuals(root: SCNNode) {
         let containerName = "LANDMARKS_CONTAINER"
         var container = root.childNode(withName: containerName, recursively: false)
         
-        // Create container if needed
         if container == nil {
             container = SCNNode()
             container?.name = containerName
             root.addChildNode(container!)
         }
         
-        // Remove deleted landmarks
         container?.childNodes.forEach { node in
             if let name = node.name,
                let type = LandmarkType(rawValue: name),
@@ -275,20 +273,20 @@ struct DesignSceneWrapper: NSViewRepresentable {
             }
         }
         
-        // Add or update landmarks
         for (type, position) in landmarks {
             let nodeName = type.rawValue
             if let existingNode = container?.childNode(withName: nodeName, recursively: false) {
-                // Update position if it changed
                 if simd_distance(SIMD3(existingNode.position), SIMD3(position)) > 0.0001 {
                     existingNode.position = position
                 }
             } else {
-                // Create new visual
-                let sphere = SCNSphere(radius: 0.002) // 2mm radius
-                sphere.firstMaterial?.diffuse.contents = NSColor.cyan
-                sphere.firstMaterial?.emission.contents = NSColor.blue
+                let sphere = SCNSphere(radius: 0.002) // 2mm
                 sphere.segmentCount = 16
+                
+                // NEW: Use dynamic color from landmark type
+                let color = type.nsColor
+                sphere.firstMaterial?.diffuse.contents = color
+                sphere.firstMaterial?.emission.contents = color.blended(withFraction: 0.5, of: .white)
                 
                 let node = SCNNode(geometry: sphere)
                 node.name = nodeName
