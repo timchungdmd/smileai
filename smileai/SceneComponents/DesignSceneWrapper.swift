@@ -1,15 +1,7 @@
 import SwiftUI
 import SceneKit
 
-// MARK: - Shared Data Models
-struct ReplaceAlertData: Identifiable {
-    let id = UUID()
-    var existingID: String
-    var newURL: URL
-    var newPos: SCNVector3
-    var newRot: SCNVector4
-}
-
+// MARK: - Enhanced DesignSceneWrapper with High-Resolution Snapshot
 struct DesignSceneWrapper: NSViewRepresentable {
     // MARK: - Properties
     let scanURL: URL
@@ -29,7 +21,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
     var isPlacingLandmarks: Bool
     var onLandmarkPicked: ((SCNVector3) -> Void)?
     
-    // Snapshot
+    // ✨ ENHANCED: Snapshot with landmarks
     @Binding var triggerSnapshot: Bool
     var onSnapshotTaken: ((NSImage) -> Void)?
     
@@ -57,10 +49,10 @@ struct DesignSceneWrapper: NSViewRepresentable {
     @Binding var showReplaceAlert: Bool
     @Binding var replaceAlertData: ReplaceAlertData?
     
-    // MARK: - Automation
+    // Automation
     @ObservedObject var automationManager: SmileAutomationManager
     
-    // NEW: Alignment Params
+    // Alignment
     var isAlignmentMode: Bool = false
     var onAlignmentPointPicked: ((SCNVector3) -> Void)?
     
@@ -74,7 +66,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         view.backgroundColor = NSColor(white: 0.1, alpha: 1.0)
         view.scene = SCNScene()
         
-        // Connect the bridge
+        // Connect automation bridge
         DispatchQueue.main.async {
             self.automationManager.projectionDelegate = { points in
                 return view.project2DPointsTo3D(points: points)
@@ -135,18 +127,31 @@ struct DesignSceneWrapper: NSViewRepresentable {
         
         guard let root = view.scene?.rootNode else { return }
         
-        // 8. Snapshot Logic
+        // ✨ 8. ENHANCED SNAPSHOT LOGIC
         if triggerSnapshot {
             DispatchQueue.main.async {
-                let scale: CGFloat = 4.0
-                let size = view.bounds.size
-                let target = CGSize(width: size.width * scale, height: size.height * scale)
-                let renderer = SCNRenderer(device: view.device, options: nil)
-                renderer.scene = view.scene
-                renderer.pointOfView = view.pointOfView
-                renderer.autoenablesDefaultLighting = true
-                let img = renderer.snapshot(atTime: 0, with: target, antialiasingMode: .multisampling4X)
-                onSnapshotTaken?(img)
+                print("📸 Capturing high-resolution snapshot with landmarks...")
+                
+                // Use EnhancedSnapshotService for full-resolution capture
+                let config = EnhancedSnapshotService.SnapshotConfig(
+                    resolution: .match,  // Match view size exactly
+                    includeMarkers: true,
+                    markerSize: 0.003,   // 3mm spheres
+                    antialiasingMode: .multisampling4X,
+                    backgroundColor: NSColor(white: 0.1, alpha: 1.0)
+                )
+                
+                if let snapshot = EnhancedSnapshotService.captureSnapshot(
+                    from: view,
+                    landmarks: landmarks,
+                    config: config
+                ) {
+                    print("✅ Snapshot captured: \(snapshot.size)")
+                    onSnapshotTaken?(snapshot)
+                } else {
+                    print("❌ Snapshot capture failed")
+                }
+                
                 triggerSnapshot = false
             }
         }
@@ -155,21 +160,23 @@ struct DesignSceneWrapper: NSViewRepresentable {
         setupScene(root, view)
         
         if mode == .analysis, let last = landmarks.values.first, view.defaultCameraController.target.length == 0 {
-             view.defaultCameraController.target = last
+            view.defaultCameraController.target = last
         }
         
-        // FIX: Ensure visuals are updated
+        // Update visuals
         updateSmileTemplate(root: root)
         updateLandmarkVisuals(root: root)
         drawEstheticAnalysis(root: root)
         updateGrid(root: root)
     }
     
-    // MARK: - Internal Setup Methods
+    // MARK: - Scene Setup
     
     private func setupScene(_ root: SCNNode, _ view: EditorView) {
         if root.childNode(withName: "CONTENT_CONTAINER", recursively: false) == nil {
-            let c = SCNNode(); c.name = "CONTENT_CONTAINER"; root.addChildNode(c)
+            let c = SCNNode()
+            c.name = "CONTENT_CONTAINER"
+            root.addChildNode(c)
         }
         
         if root.childNode(withName: "PATIENT_MODEL", recursively: true) == nil {
@@ -201,7 +208,9 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 applyMaterial(to: node)
                 
                 root.addChildNode(node)
-                DispatchQueue.main.async { view.defaultCameraController.target = SCNVector3Zero }
+                DispatchQueue.main.async {
+                    view.defaultCameraController.target = SCNVector3Zero
+                }
             }
         } else {
             if let node = root.childNode(withName: "PATIENT_MODEL", recursively: true) {
@@ -224,7 +233,9 @@ struct DesignSceneWrapper: NSViewRepresentable {
                     mat.lightingModel = .physicallyBased
                 } else {
                     mat.lightingModel = .blinn
-                    if mat.diffuse.contents == nil { mat.diffuse.contents = NSColor.lightGray }
+                    if mat.diffuse.contents == nil {
+                        mat.diffuse.contents = NSColor.lightGray
+                    }
                 }
             }
         }
@@ -232,7 +243,9 @@ struct DesignSceneWrapper: NSViewRepresentable {
     
     private func findFirstGeometryNode(in node: SCNNode) -> SCNNode? {
         if node.geometry != nil { return node }
-        for child in node.childNodes { if let found = findFirstGeometryNode(in: child) { return found } }
+        for child in node.childNodes {
+            if let found = findFirstGeometryNode(in: child) { return found }
+        }
         return nil
     }
     
@@ -241,7 +254,11 @@ struct DesignSceneWrapper: NSViewRepresentable {
         let nodeID = "\(name)|\(libraryID.uuidString)"
         var templateNode = root.childNode(withName: nodeID, recursively: false)
         
-        root.childNodes.forEach { if $0.name?.starts(with: name) == true && $0.name != nodeID { $0.removeFromParentNode() } }
+        root.childNodes.forEach {
+            if $0.name?.starts(with: name) == true && $0.name != nodeID {
+                $0.removeFromParentNode()
+            }
+        }
         
         if showSmileTemplate {
             if templateNode == nil {
@@ -254,7 +271,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
         }
     }
     
-    // FIX: Updated to use dynamic colors from LandmarkType
+    // ✨ ENHANCED: Landmark visualization (will be captured in snapshot)
     private func updateLandmarkVisuals(root: SCNNode) {
         let containerName = "LANDMARKS_CONTAINER"
         var container = root.childNode(withName: containerName, recursively: false)
@@ -265,6 +282,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
             root.addChildNode(container!)
         }
         
+        // Remove old landmarks
         container?.childNodes.forEach { node in
             if let name = node.name,
                let type = LandmarkType(rawValue: name),
@@ -273,6 +291,7 @@ struct DesignSceneWrapper: NSViewRepresentable {
             }
         }
         
+        // Add/update landmarks
         for (type, position) in landmarks {
             let nodeName = type.rawValue
             if let existingNode = container?.childNode(withName: nodeName, recursively: false) {
@@ -280,18 +299,44 @@ struct DesignSceneWrapper: NSViewRepresentable {
                     existingNode.position = position
                 }
             } else {
+                // Create landmark sphere with label
                 let sphere = SCNSphere(radius: 0.002) // 2mm
                 sphere.segmentCount = 16
                 
-                // NEW: Use dynamic color from landmark type
                 let color = type.nsColor
                 sphere.firstMaterial?.diffuse.contents = color
                 sphere.firstMaterial?.emission.contents = color.blended(withFraction: 0.5, of: .white)
+                sphere.firstMaterial?.lightingModel = .constant // Always visible
                 
                 let node = SCNNode(geometry: sphere)
                 node.name = nodeName
                 node.position = position
+                
                 container?.addChildNode(node)
+                
+                // Add text label (optional - for detailed views)
+                // Uncomment if you want text labels in 3D space
+                /*
+                let text = SCNText(string: type.rawValue.prefix(2).uppercased(), extrusionDepth: 0.0)
+                text.font = NSFont.systemFont(ofSize: 0.002, weight: .bold)
+                text.flatness = 0.1
+                text.firstMaterial?.diffuse.contents = NSColor.white
+                text.firstMaterial?.lightingModel = .constant
+                
+                let textNode = SCNNode(geometry: text)
+                textNode.position = SCNVector3(
+                    position.x,
+                    position.y + 0.003,
+                    position.z
+                )
+                
+                // Billboard constraint so text always faces camera
+                let billboard = SCNBillboardConstraint()
+                billboard.freeAxes = [.Y]
+                textNode.constraints = [billboard]
+                
+                container?.addChildNode(textNode)
+                */
             }
         }
     }
