@@ -1,10 +1,3 @@
-//
-//  SmileOverlayState.swift
-//  smileai
-//
-//  2D Smile Overlay System - Main State Container
-//
-
 import Foundation
 import SwiftUI
 import SceneKit
@@ -50,23 +43,20 @@ class SmileOverlayState: ObservableObject {
     private var transformHistory: [SmileTransform2D] = []
     private var historyIndex: Int = -1
     
+    var canUndo: Bool { historyIndex >= 0 }
+    var canRedo: Bool { historyIndex < transformHistory.count - 1 }
+    
     // MARK: - Computed Properties
     
-    /// Teeth with global transform applied
     var transformedTeeth: [ToothOverlay2D] {
         return toothOverlays.map { tooth in
             var transformed = tooth
-            
-            // Apply global transform to properties
             transformed.position = smileTransform.apply(to: tooth.position)
             transformed.rotation += smileTransform.rotation
             transformed.scale *= smileTransform.scale
-            
-            // Apply global transform to points
             if !transformed.outlinePoints.isEmpty {
                 transformed.outlinePoints = transformed.outlinePoints.map { smileTransform.apply(to: $0) }
             }
-            
             return transformed
         }
     }
@@ -76,13 +66,12 @@ class SmileOverlayState: ObservableObject {
         return toothOverlays.first { $0.id == id }
     }
     
-    var hasContent: Bool {
-        return sourcePhoto != nil && !toothOverlays.isEmpty
-    }
+    var hasContent: Bool { return sourcePhoto != nil && !toothOverlays.isEmpty }
     
     // MARK: - Initialization
     init() {
         self.smileTransform.center = CGPoint(x: 0, y: 0)
+        self.recordTransform(self.smileTransform)
     }
     
     // MARK: - Methods
@@ -90,22 +79,15 @@ class SmileOverlayState: ObservableObject {
     func loadPhoto(_ photo: NSImage) {
         self.sourcePhoto = photo
         self.photoSize = photo.size
-        
-        self.smileTransform.center = CGPoint(
-            x: photoSize.width / 2,
-            y: photoSize.height / 2
-        )
+        self.smileTransform.center = CGPoint(x: photoSize.width / 2, y: photoSize.height / 2)
         self.measurementGrid.origin = smileTransform.center
-        
         if cameraCalibration == nil {
             cameraCalibration = CameraCalibrationData.estimate(from: photo)
             pixelsPerMM = cameraCalibration?.pixelsPerMM(photoWidth: photoSize.width) ?? 10.0
         }
     }
     
-    func addTooth(_ tooth: ToothOverlay2D) {
-        toothOverlays.append(tooth)
-    }
+    func addTooth(_ tooth: ToothOverlay2D) { toothOverlays.append(tooth) }
     
     func removeTooth(id: UUID) {
         toothOverlays.removeAll { $0.id == id }
@@ -117,11 +99,8 @@ class SmileOverlayState: ObservableObject {
         selectedToothID = nil
     }
     
-    // Select tooth at point
     func selectTooth(at point: CGPoint) -> Bool {
-        // Iterate in reverse (front-to-back) for intuitive selection
         for tooth in transformedTeeth.reversed() {
-            // FIX: Use boundingRect instead of manually constructing rect from CGFloat scale
             if tooth.boundingRect.contains(point) {
                 selectedToothID = tooth.id
                 return true
@@ -129,6 +108,62 @@ class SmileOverlayState: ObservableObject {
         }
         selectedToothID = nil
         return false
+    }
+    
+    // MARK: - Transform Logic
+    
+    func applyTransform(_ transform: SmileTransform2D) {
+        if let id = selectedToothID, let index = toothOverlays.firstIndex(where: { $0.id == id }) {
+            var tooth = toothOverlays[index]
+            tooth.applyTransform(transform)
+            toothOverlays[index] = tooth
+        } else {
+            smileTransform.translation.x += transform.translation.x
+            smileTransform.translation.y += transform.translation.y
+            smileTransform.rotation += transform.rotation
+            smileTransform.scale *= transform.scale
+            recordTransform(smileTransform)
+        }
+    }
+    
+    func resetTransform() {
+        if let id = selectedToothID, let index = toothOverlays.firstIndex(where: { $0.id == id }) {
+            var tooth = toothOverlays[index]
+            tooth.resetTransform()
+            toothOverlays[index] = tooth
+        } else {
+            let oldCenter = smileTransform.center
+            smileTransform = SmileTransform2D()
+            smileTransform.center = oldCenter
+            recordTransform(smileTransform)
+        }
+    }
+    
+    // MARK: - Undo/Redo Logic
+    
+    func recordTransform(_ transform: SmileTransform2D) {
+        if historyIndex < transformHistory.count - 1 {
+            transformHistory = Array(transformHistory.prefix(historyIndex + 1))
+        }
+        transformHistory.append(transform)
+        historyIndex = transformHistory.count - 1
+        if transformHistory.count > 50 {
+            transformHistory.removeFirst()
+            historyIndex -= 1
+        }
+    }
+    
+    func undoTransform() {
+        guard canUndo else { return }
+        historyIndex -= 1
+        if historyIndex < 0 { historyIndex = 0 }
+        smileTransform = transformHistory[historyIndex]
+    }
+    
+    func redoTransform() {
+        guard canRedo else { return }
+        historyIndex += 1
+        smileTransform = transformHistory[historyIndex]
     }
 }
 
@@ -146,6 +181,28 @@ struct SmileTransform2D: Equatable {
         let cosT = cos(rotation); let sinT = sin(rotation)
         let rot = CGPoint(x: p.x * cosT - p.y * sinT, y: p.x * sinT + p.y * cosT)
         return CGPoint(x: rot.x + center.x + translation.x, y: rot.y + center.y + translation.y)
+    }
+    
+    static func fromDrag(start: CGPoint, end: CGPoint, handle: TransformHandle, currentTransform: SmileTransform2D) -> SmileTransform2D {
+        var transform = currentTransform
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        
+        switch handle {
+        case .center:
+            transform.translation.x += dx
+            transform.translation.y += dy
+        case .corner:
+            let startDist = hypot(start.x - transform.center.x, start.y - transform.center.y)
+            let endDist = hypot(end.x - transform.center.x, end.y - transform.center.y)
+            if startDist > 0 { transform.scale *= (endDist / startDist) }
+        case .rotation:
+            let startAngle = atan2(start.y - transform.center.y, start.x - transform.center.x)
+            let endAngle = atan2(end.y - transform.center.y, end.x - transform.center.x)
+            transform.rotation += (endAngle - startAngle)
+        default: break
+        }
+        return transform
     }
 }
 

@@ -14,7 +14,10 @@ struct SmileOverlayCanvas: View {
     
     // MARK: - State
     
-    @StateObject private var state: SmileOverlayState
+    // State is owned by parent (Smile2DOverlaySheet), so we observe it
+    @ObservedObject var state: SmileOverlayState
+    
+    // TransformController is local to this view (manages gestures)
     @StateObject private var transformController: TransformController
     
     // MARK: - View Settings
@@ -25,23 +28,19 @@ struct SmileOverlayCanvas: View {
     // MARK: - Initialization
     
     init(state: SmileOverlayState) {
-        let transformController = TransformController(state: state)
-        
-        _state = StateObject(wrappedValue: state)
-        _transformController = StateObject(wrappedValue: transformController)
+        self.state = state
+        // Initialize StateObject with dependency
+        _transformController = StateObject(wrappedValue: TransformController(state: state))
     }
     
-    // Convenience init with photo
+    // Convenience init for previews
     init(photo: NSImage? = nil) {
-        let state = SmileOverlayState()
+        let tempState = SmileOverlayState()
         if let photo = photo {
-            state.loadPhoto(photo)
+            tempState.loadPhoto(photo)
         }
-        
-        let transformController = TransformController(state: state)
-        
-        _state = StateObject(wrappedValue: state)
-        _transformController = StateObject(wrappedValue: transformController)
+        self.state = tempState
+        _transformController = StateObject(wrappedValue: TransformController(state: tempState))
     }
     
     // MARK: - Body
@@ -101,24 +100,26 @@ struct SmileOverlayCanvas: View {
                 }
                 
                 // 5. Interaction layer (transparent overlay for gestures)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(transformController.dragGesture())
-                    .gesture(transformController.magnificationGesture())
-                    .gesture(transformController.rotationGesture())
+                // FIX: Only enable gestures if a photo is loaded.
+                // Otherwise, this layer blocks the "Load Photo" button.
+                if state.sourcePhoto != nil {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(transformController.dragGesture())
+                        .gesture(transformController.magnificationGesture())
+                        .gesture(transformController.rotationGesture())
+                }
             }
             .onAppear {
                 canvasSize = geometry.size
+                transformController.updateHandles()
             }
-            .onChange(of: geometry.size) { oldSize, newSize in
+            .onChange(of: geometry.size) { _, newSize in
                 canvasSize = newSize
             }
         }
         .toolbar {
             toolbarContent
-        }
-        .onAppear {
-            transformController.updateHandles()
         }
     }
     
@@ -148,105 +149,58 @@ struct SmileOverlayCanvas: View {
         
         // Left side tools
         ToolbarItemGroup(placement: .navigation) {
-            
-            // Grid toggle
             Button(action: { state.showGrid.toggle() }) {
-                Label(
-                    "Grid",
-                    systemImage: state.showGrid ? "grid" : "grid.slash"
-                )
+                Label("Grid", systemImage: state.showGrid ? "grid" : "grid.slash")
             }
             .help("Toggle measurement grid")
             
-            // Measurements toggle
             Button(action: { state.showMeasurements.toggle() }) {
-                Label(
-                    "Measurements",
-                    systemImage: state.showMeasurements ? "ruler" : "ruler.fill"
-                )
+                Label("Measurements", systemImage: state.showMeasurements ? "ruler" : "ruler.fill")
             }
             .help("Toggle measurements")
             
             Divider()
             
-            // Handles toggle
             Button(action: { showHandles.toggle() }) {
-                Label(
-                    "Handles",
-                    systemImage: showHandles ? "hand.draw" : "hand.draw.fill"
-                )
+                Label("Handles", systemImage: showHandles ? "hand.draw" : "hand.draw.fill")
             }
             .help("Toggle transform handles")
             
-            // Lock toggle
             Button(action: { state.isLocked.toggle() }) {
-                Label(
-                    "Lock",
-                    systemImage: state.isLocked ? "lock.fill" : "lock.open"
-                )
+                Label("Lock", systemImage: state.isLocked ? "lock.fill" : "lock.open")
             }
             .help("Lock transforms")
         }
         
         // Center controls
         ToolbarItemGroup(placement: .principal) {
-            
-            // Opacity slider
             HStack(spacing: 8) {
-                Image(systemName: "eye")
-                    .foregroundColor(.secondary)
-                
-                Slider(
-                    value: $state.overlayOpacity,
-                    in: 0.1...1.0
-                ) {
+                Image(systemName: "eye").foregroundColor(.secondary)
+                Slider(value: $state.overlayOpacity, in: 0.1...1.0) {
                     Text("Opacity")
                 }
                 .frame(width: 120)
-                .help("Overlay opacity")
-                
                 Text("\(Int(state.overlayOpacity * 100))%")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(width: 40)
+                    .font(.caption).foregroundColor(.secondary).frame(width: 40)
             }
             
             Divider()
             
-            // Transform presets
             Menu {
-                Button("Fit to Photo") {
-                    transformController.applyPreset(.fit)
-                }
-                
-                Button("Center") {
-                    transformController.applyPreset(.center)
-                }
-                
-                Button("Reset") {
-                    transformController.applyPreset(.original)
-                }
-                
+                Button("Fit to Photo") { transformController.applyPreset(.fit) }
+                Button("Center") { transformController.applyPreset(.center) }
+                Button("Reset") { transformController.applyPreset(.original) }
                 Divider()
-                
-                Button("Align to Midline") {
-                    transformController.alignToMidline()
-                }
-                .disabled(state.measurementGrid.midline == nil)
-                
-                Button("Auto Level") {
-                    transformController.autoLevel()
-                }
+                Button("Align to Midline") { transformController.alignToMidline() }
+                    .disabled(state.measurementGrid.midline == nil)
+                Button("Auto Level") { transformController.autoLevel() }
             } label: {
                 Label("Transform", systemImage: "slider.horizontal.3")
             }
-            .help("Transform presets")
         }
         
         // Right side controls
         ToolbarItemGroup(placement: .automatic) {
-            
-            // Undo/Redo
             Button(action: { state.undoTransform() }) {
                 Label("Undo", systemImage: "arrow.uturn.backward")
             }
@@ -261,15 +215,12 @@ struct SmileOverlayCanvas: View {
             
             Divider()
             
-            // View options
             Menu {
                 Toggle("Show Grid", isOn: $state.showGrid)
                 Toggle("Show Measurements", isOn: $state.showMeasurements)
                 Toggle("Show Fill", isOn: $state.showFill)
                 Toggle("Snap to Grid", isOn: $transformController.snapToGrid)
-                
                 Divider()
-                
                 Picker("Grid Spacing", selection: $state.gridSpacing) {
                     Text("1mm").tag(Float(1.0))
                     Text("2mm").tag(Float(2.0))
@@ -292,51 +243,13 @@ struct SmileOverlayCanvas: View {
         panel.message = "Select an intraoral photograph"
         
         panel.begin { response in
-            guard response == .OK,
-                  let url = panel.url,
-                  let image = NSImage(contentsOf: url) else {
-                return
+            guard response == .OK, let url = panel.url, let image = NSImage(contentsOf: url) else { return }
+            
+            // UI updates must be on main thread
+            DispatchQueue.main.async {
+                state.loadPhoto(image)
+                transformController.updateHandles()
             }
-            
-            state.loadPhoto(image)
-            transformController.updateHandles()
         }
     }
 }
-
-// MARK: - Preview
-
-#if DEBUG
-struct SmileOverlayCanvas_Previews: PreviewProvider {
-    static var previews: some View {
-        // Preview with mock photo
-        let state = SmileOverlayState()
-        
-        // Create mock teeth
-        var mockTeeth: [ToothOverlay2D] = []
-        for i in 0..<8 {
-            let x = CGFloat(400 + i * 50)
-            let y: CGFloat = 300
-            
-            var tooth = ToothOverlay2D(
-                toothNumber: "\(i + 1)",
-                toothType: .central,
-                position: CGPoint(x: x, y: y),
-                width: 8.5,
-                height: 10.5
-            )
-            
-            // Generate placeholder outline
-            tooth.generatePlaceholderOutline()
-            
-            mockTeeth.append(tooth)
-        }
-        
-        state.toothOverlays = mockTeeth
-        state.photoSize = CGSize(width: 1920, height: 1080)
-        
-        return SmileOverlayCanvas(state: state)
-            .frame(width: 1200, height: 800)
-    }
-}
-#endif
