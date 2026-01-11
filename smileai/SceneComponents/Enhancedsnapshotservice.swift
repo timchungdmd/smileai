@@ -63,7 +63,11 @@ class EnhancedSnapshotService {
             return nil
         }
         
-        let snapshotScene = originalScene.clone()
+        // FIX: SCNScene does not have clone(). We create a new scene and copy nodes.
+        let snapshotScene = SCNScene()
+        // Deep copy of the root node hierarchy
+        let clonedRoot = originalScene.rootNode.clone()
+        snapshotScene.rootNode.addChildNode(clonedRoot)
         
         // 3. Add landmark markers as geometry (not overlays)
         if config.includeMarkers && !landmarks.isEmpty {
@@ -156,7 +160,8 @@ class EnhancedSnapshotService {
         
         // Create 3D text
         let text = SCNText(string: type.rawValue.prefix(2).uppercased(), extrusionDepth: 0.0)
-        text.font = NSFont.systemFont(ofSize: markerSize * 800, weight: .bold)  // Scale font
+        // Adjust font size scaling
+        text.font = NSFont.systemFont(ofSize: markerSize * 800, weight: .bold)
         text.flatness = 0.1
         
         // Material
@@ -172,11 +177,11 @@ class EnhancedSnapshotService {
         // Center the text
         let (min, max) = textNode.boundingBox
         let textWidth = CGFloat(max.x - min.x)
-        let textHeight = CGFloat(max.y - min.y)
         
+        // FIX: Removed Float() cast since SCNVector3 uses CGFloat on macOS
         textNode.position = SCNVector3(
             position.x - textWidth / 2,
-            position.y + Float(markerSize * 2),  // Position above marker
+            position.y + (markerSize * 2),  // Position above marker
             position.z
         )
         

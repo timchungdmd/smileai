@@ -1,6 +1,16 @@
 import SwiftUI
 import SceneKit
 
+// MARK: - Shared Data Models
+// FIX: Added missing struct definition
+struct ReplaceAlertData: Identifiable {
+    let id = UUID()
+    var existingID: String
+    var newURL: URL
+    var newPos: SCNVector3
+    var newRot: SCNVector4
+}
+
 // MARK: - Enhanced DesignSceneWrapper with High-Resolution Snapshot
 struct DesignSceneWrapper: NSViewRepresentable {
     // MARK: - Properties
@@ -313,30 +323,6 @@ struct DesignSceneWrapper: NSViewRepresentable {
                 node.position = position
                 
                 container?.addChildNode(node)
-                
-                // Add text label (optional - for detailed views)
-                // Uncomment if you want text labels in 3D space
-                /*
-                let text = SCNText(string: type.rawValue.prefix(2).uppercased(), extrusionDepth: 0.0)
-                text.font = NSFont.systemFont(ofSize: 0.002, weight: .bold)
-                text.flatness = 0.1
-                text.firstMaterial?.diffuse.contents = NSColor.white
-                text.firstMaterial?.lightingModel = .constant
-                
-                let textNode = SCNNode(geometry: text)
-                textNode.position = SCNVector3(
-                    position.x,
-                    position.y + 0.003,
-                    position.z
-                )
-                
-                // Billboard constraint so text always faces camera
-                let billboard = SCNBillboardConstraint()
-                billboard.freeAxes = [.Y]
-                textNode.constraints = [billboard]
-                
-                container?.addChildNode(textNode)
-                */
             }
         }
     }
