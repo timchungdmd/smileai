@@ -9,30 +9,42 @@ struct ReplaceAlertData: Identifiable {
 struct DesignSceneWrapper: NSViewRepresentable {
     let scanURL: URL
     let mode: DesignMode
+    
     var showSmileTemplate: Bool
     var smileParams: SmileTemplateParams
     var toothStates: [String: ToothState]
     var onToothSelected: ((String?) -> Void)?
     var onToothTransformChange: ((String, ToothState) -> Void)?
+    
     var landmarks: [LandmarkType: SCNVector3]
     var activeLandmarkType: LandmarkType?
     var isPlacingLandmarks: Bool
     var onLandmarkPicked: ((SCNVector3) -> Void)?
+    
     @Binding var triggerSnapshot: Bool
     var onSnapshotTaken: ((NSImage) -> Void)?
+    
     var showGrid: Bool
     var onModelLoaded: ((_ bounds: (min: SCNVector3, max: SCNVector3)) -> Void)? = nil
+    
     var toothLibrary: [String: URL] = [:]
     var libraryID: UUID = UUID()
+    
     @Binding var isDrawingCurve: Bool
     var isCurveLocked: Bool
     @Binding var customCurvePoints: [SCNVector3]
     var useStoneMaterial: Bool
     var isModelLocked: Bool
     var onToothDrop: ((String, URL) -> Void)?
+    
     @Binding var showReplaceAlert: Bool
     @Binding var replaceAlertData: ReplaceAlertData?
+    
     @ObservedObject var automationManager: SmileAutomationManager
+    
+    // NEW: Alignment Params
+    var isAlignmentMode: Bool = false
+    var onAlignmentPointPicked: ((SCNVector3) -> Void)?
     
     func makeNSView(context: Context) -> EditorView {
         let view = EditorView()
@@ -52,6 +64,11 @@ struct DesignSceneWrapper: NSViewRepresentable {
     
     func updateNSView(_ view: EditorView, context: Context) {
         view.currentMode = mode
+        
+        // Pass Alignment State
+        view.isAlignmentMode = isAlignmentMode
+        view.onAlignmentPointPicked = onAlignmentPointPicked
+        
         view.onToothSelected = { name in self.onToothSelected?(name) }
         view.onToothTransformChange = onToothTransformChange
         view.onLandmarkPicked = onLandmarkPicked
