@@ -52,15 +52,25 @@ class TransformController: ObservableObject {
     }
     
     private func calculateBounds(for teeth: [ToothOverlay2D]) -> CGRect {
+        // Safe default if no teeth exist
         guard !teeth.isEmpty else { return CGRect(x: -50, y: -50, width: 100, height: 100) }
+        
         var minX: CGFloat = .infinity; var maxX: CGFloat = -.infinity
         var minY: CGFloat = .infinity; var maxY: CGFloat = -.infinity
+        
         for tooth in teeth where tooth.visible {
             for point in tooth.outlinePoints {
                 minX = min(minX, point.x); maxX = max(maxX, point.x)
                 minY = min(minY, point.y); maxY = max(maxY, point.y)
             }
         }
+        
+        // FIX: Check if bounds are still infinite (e.g. teeth exist but have no points)
+        // This prevents the NaN crash when calculating width/height
+        if minX == .infinity || maxX == -.infinity || minY == .infinity || maxY == -.infinity {
+             return CGRect(x: -50, y: -50, width: 100, height: 100)
+        }
+        
         let padding: CGFloat = 10
         return CGRect(x: minX - padding, y: minY - padding, width: (maxX - minX) + 2 * padding, height: (maxY - minY) + 2 * padding)
     }

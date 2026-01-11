@@ -95,11 +95,25 @@ struct ToothOverlay2D: Identifiable, Equatable {
         self.width = width
         self.height = height
         self.thickness = thickness
-        self.outlinePoints = outlinePoints
         self.visible = visible
         self.sourceMeshName = sourceMeshName
         self.createdAt = Date()
         self.modifiedAt = Date()
+        
+        // FIX: Ensure outline points are initialized to prevent NaN errors
+        if outlinePoints.isEmpty {
+            let halfW = CGFloat(width) / 2
+            let halfH = CGFloat(height) / 2
+            
+            self.outlinePoints = [
+                CGPoint(x: position.x - halfW, y: position.y - halfH),
+                CGPoint(x: position.x + halfW, y: position.y - halfH),
+                CGPoint(x: position.x + halfW, y: position.y + halfH),
+                CGPoint(x: position.x - halfW, y: position.y + halfH)
+            ]
+        } else {
+            self.outlinePoints = outlinePoints
+        }
     }
     
     // MARK: - Computed Properties
@@ -321,13 +335,6 @@ extension ToothType {
     
     /// Parse FDI notation to determine tooth type
     static func fromFDI(_ fdi: String) -> ToothType {
-        // FDI examples:
-        // 11, 21 = Central incisors
-        // 12, 22 = Lateral incisors
-        // 13, 23 = Canines
-        // 14, 15, 24, 25 = Premolars
-        // 16, 17, 26, 27 = Molars
-        
         guard fdi.count == 2,
               let lastDigit = Int(String(fdi.last!)) else {
             return .central
