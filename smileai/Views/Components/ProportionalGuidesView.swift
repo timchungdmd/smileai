@@ -447,8 +447,7 @@ struct ProportionalGuidesView: View {
     }
 
     private func drawLabel(context: GraphicsContext, text: String, at point: CGPoint, color: Color) {
-        var contextCopy = context
-        contextCopy.draw(
+        context.draw(
             Text(text)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(color),
