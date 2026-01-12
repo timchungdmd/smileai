@@ -1051,7 +1051,7 @@ struct SmileDesignView: View {
                 facialLandmarks.leftPupil = cgPoint
             case .rightPupil:
                 facialLandmarks.rightPupil = cgPoint
-            case .noseTip:
+            case .subnasale:
                 facialLandmarks.noseTip = cgPoint
             case .leftCommissure:
                 facialLandmarks.leftMouthCorner = cgPoint
