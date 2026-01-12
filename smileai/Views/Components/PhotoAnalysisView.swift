@@ -35,15 +35,23 @@ struct PhotoAnalysisView: View {
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(currentMagnification)
                     .offset(position + dragOffset)
+                    .onTapGesture { location in
+                        // Handle tap BEFORE gestures to ensure marker placement works
+                        if let callback = onTap {
+                            callback(location)
+                        } else if isPlacing, let type = activeType, !isLocked {
+                            landmarks[type] = location
+                        }
+                    }
                     .gesture(
                         DragGesture()
                             .onChanged { value in
-                                if !isLocked {
+                                if !isLocked && !isPlacing {
                                     dragOffset = value.translation
                                 }
                             }
                             .onEnded { value in
-                                if !isLocked {
+                                if !isLocked && !isPlacing {
                                     position += value.translation
                                     dragOffset = .zero
                                 }
@@ -52,18 +60,11 @@ struct PhotoAnalysisView: View {
                     .gesture(
                         MagnificationGesture()
                             .onChanged { value in
-                                if !isLocked {
+                                if !isLocked && !isPlacing {
                                     currentMagnification = max(1.0, value)
                                 }
                             }
                     )
-                    .onTapGesture { location in
-                        if let callback = onTap {
-                            callback(location)
-                        } else if isPlacing, let type = activeType, !isLocked {
-                            landmarks[type] = location
-                        }
-                    }
                 
                 // 2. Proportional Guides Layer
                 if !enabledGuides.isEmpty {
