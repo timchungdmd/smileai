@@ -61,7 +61,6 @@ class SmileLineDetectionService {
 
         // Determine curve characteristics
         let lipHeight = upperLip.y
-        let cornerMidY = (leftCorner.y + rightCorner.y) / 2
         let curvature = calculateSmileCurvature(landmarks: landmarks)
 
         for i in 1..<segments {

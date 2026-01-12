@@ -19,6 +19,7 @@ class AISmileSimulationService {
     // MARK: - Photo Simulation
 
     /// Generate realistic smile makeover photo simulation
+    @MainActor
     static func generateSmileSimulation(
         originalPhoto: NSImage,
         toothDesign: [ToothDesignData],

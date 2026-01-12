@@ -9,18 +9,18 @@
 import Foundation
 import SceneKit
 import SwiftUI
+import Combine
 
 /// Manages virtual wax-up workflow from diagnostic to final prosthetic design
-@Observable
-class VirtualWaxUpManager {
+class VirtualWaxUpManager: ObservableObject {
 
     // MARK: - Properties
 
-    var currentPhase: WaxUpPhase = .diagnostic
-    var diagnostic: DiagnosticData?
-    var waxUpDesign: WaxUpDesign?
-    var history: [WaxUpHistoryEntry] = []
-    var modifications: [WaxUpModification] = []
+    @Published var currentPhase: WaxUpPhase = .diagnostic
+    @Published var diagnostic: DiagnosticData?
+    @Published var waxUpDesign: WaxUpDesign?
+    @Published var history: [WaxUpHistoryEntry] = []
+    @Published var modifications: [WaxUpModification] = []
 
     // MARK: - Phase Management
 
