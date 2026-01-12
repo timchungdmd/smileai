@@ -2,16 +2,25 @@ import SwiftUI
 
 // MARK: - Photo Analysis View
 struct PhotoAnalysisView: View {
-    
+
     // MARK: - Properties
     let image: NSImage
     @Binding var landmarks: [LandmarkType: CGPoint]
     var isPlacing: Bool
     var isLocked: Bool
     var activeType: LandmarkType?
-    
+
     // NEW: Optional tap handler for alignment
     var onTap: ((CGPoint) -> Void)? = nil
+
+    // NEW: Proportional guides
+    @State private var enabledGuides: Set<GuideType> = [
+        .facialMidline,
+        .dentalMidline,
+        .goldenProportion,
+        .smileWidth
+    ]
+    @State private var showGuidesSettings = false
     
     @State private var dragOffset: CGSize = .zero
     @State private var currentMagnification: CGFloat = 1.0
@@ -56,7 +65,18 @@ struct PhotoAnalysisView: View {
                         }
                     }
                 
-                // 2. Landmark Overlay Layer
+                // 2. Proportional Guides Layer
+                if !enabledGuides.isEmpty {
+                    ProportionalGuidesView(
+                        landmarks: convertLandmarksToFacialLandmarks(),
+                        imageSize: image.size,
+                        enabledGuides: enabledGuides
+                    )
+                    .scaleEffect(currentMagnification)
+                    .offset(position + dragOffset)
+                }
+
+                // 3. Landmark Overlay Layer
                 ForEach(landmarks.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { type in
                     if let point = landmarks[type] {
                         LandmarkPointView(
@@ -67,10 +87,54 @@ struct PhotoAnalysisView: View {
                         )
                     }
                 }
+
+                // 4. Guide Settings Button
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { showGuidesSettings.toggle() }) {
+                            Image(systemName: "slider.horizontal.3")
+                                .padding(8)
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Proportional Guides Settings")
+                        .padding()
+                    }
+                    Spacer()
+                }
             }
             .clipped()
             .background(Color.black)
+            .popover(isPresented: $showGuidesSettings) {
+                GuideSettingsView(enabledGuides: $enabledGuides)
+                    .frame(width: 400, height: 600)
+            }
         }
+    }
+
+    // MARK: - Helper Methods
+
+    /// Convert landmarks dictionary to FacialLandmarks struct
+    private func convertLandmarksToFacialLandmarks() -> FacialLandmarks? {
+        var facialLandmarks = FacialLandmarks()
+
+        facialLandmarks.leftPupil = landmarks[.leftPupil]
+        facialLandmarks.rightPupil = landmarks[.rightPupil]
+        facialLandmarks.noseTip = landmarks[.subnasale]
+        facialLandmarks.leftMouthCorner = landmarks[.leftCommissure]
+        facialLandmarks.rightMouthCorner = landmarks[.rightCommissure]
+        facialLandmarks.upperLipCenter = landmarks[.upperLipCenter]
+        facialLandmarks.lowerLipCenter = landmarks[.lowerLipCenter]
+        facialLandmarks.chin = landmarks[.menton]
+
+        // Return nil if we don't have minimum required landmarks
+        guard facialLandmarks.leftPupil != nil && facialLandmarks.rightPupil != nil else {
+            return nil
+        }
+
+        return facialLandmarks
     }
 }
 
