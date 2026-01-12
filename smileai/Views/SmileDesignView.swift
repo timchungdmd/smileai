@@ -4,6 +4,14 @@ import UniformTypeIdentifiers
 import AVFoundation
 import simd
 
+// MARK: - Data Models
+struct Imported3DModel: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+    var name: String
+    var isVisible: Bool = true
+}
+
 struct SmileDesignView: View {
     @EnvironmentObject var session: PatientSession
     @StateObject private var history = TransformHistory()
@@ -14,6 +22,9 @@ struct SmileDesignView: View {
     @State private var triggerSnapshot: Bool = false
     @State private var isModelLocked: Bool = false
     
+    // Multiple Imported Models
+    @State private var importedModels: [Imported3DModel] = []
+    
     // MARK: - MANAGERS
     @StateObject private var markerManager = AnatomicalMarkerManager()
     @StateObject private var automationManager = SmileAutomationManager()
@@ -22,7 +33,7 @@ struct SmileDesignView: View {
     
     @State private var showAlignmentUI = false
     
-    // NEW: Multi-Ratio Calculator State
+    // Multi-Ratio Calculator State
     @State private var r1Start: LandmarkType = .rightCanine
     @State private var r1End: LandmarkType = .leftCanine
     @State private var r2Start: LandmarkType = .rightCommissure
@@ -54,6 +65,8 @@ struct SmileDesignView: View {
     @State private var templateVisible: Bool = true
     @State private var toothStates: [String: ToothState] = [:]
     @State private var selectedToothName: String? = nil
+    
+    // Template Params
     @State private var archPosX: Float = 0.0
     @State private var archPosY: Float = 0.0
     @State private var archPosZ: Float = 0.05
@@ -61,6 +74,7 @@ struct SmileDesignView: View {
     @State private var archCurve: Float = 0.5
     @State private var toothLength: Float = 1.0
     @State private var toothRatio: Float = 0.8
+    
     @State private var isExporting = false
     @State private var isExporting2D = false
     @State private var isImporting3D = false
@@ -68,6 +82,7 @@ struct SmileDesignView: View {
     @State private var selectedFormat: GeometryUtils.ExportFormat = .stl
     @State private var show2DOverlaySheet = false
     
+    // MARK: - BODY
     var body: some View {
         HStack(spacing: 0) {
             sidebarView
@@ -91,10 +106,19 @@ struct SmileDesignView: View {
                 handleDroppedContent(type)
             }
         }
-        .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj]) { res in handleImport3D(res) }
-        .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in handleImportPhoto(res) }
-        .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in handleImportLibrary(res) }
+        .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj], allowsMultipleSelection: true) { res in
+            print("📦 3D Import Result: \(res)")
+            handleImport3D(res)
+        }
+        .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in
+            print("📸 Photo Import Result: \(res)")
+            handleImportPhoto(res)
+        }
+        .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in
+            handleImportLibrary(res)
+        }
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project3D") { _ in }
+        // FIX: render2DAnalysis() is called here, defined below
         .fileExporter(isPresented: $isExporting2D, document: ImageFile(image: render2DAnalysis()), contentType: .png, defaultFilename: "Analysis_Snapshot") { _ in }
         .sheet(isPresented: $show2DOverlaySheet) {
             Smile2DOverlaySheet(state: smileOverlayState, isPresented: $show2DOverlaySheet)
@@ -104,6 +128,7 @@ struct SmileDesignView: View {
             Button("Clear All", role: .destructive) {
                 session.activeScanURL = nil
                 facePhoto = nil
+                importedModels.removeAll()
                 markerManager.reset()
                 toothAssignments.removeAll()
                 importedFiles.removeAll()
@@ -126,24 +151,48 @@ struct SmileDesignView: View {
             HStack {
                 Text("Smile Studio").font(.title2).fontWeight(.bold)
                 Spacer()
-                Button(action: { isImporting3D = true }) {
-                    Image(systemName: "cube")
+                Button(action: {
+                    print("🔘 Top 3D Import Button Pressed")
+                    isImporting3D = true
+                }) {
+                    Image(systemName: "cube").help("Import 3D Model")
                 }.buttonStyle(.plain)
+                
                 Button(action: { isImportingPhoto = true }) {
-                    Image(systemName: "photo")
+                    Image(systemName: "photo").help("Import Photo")
                 }.buttonStyle(.plain).padding(.leading, 8)
             }.padding(.top)
             
             Divider()
             
-            if session.activeScanURL == nil && facePhoto == nil {
-                ContentUnavailableView {
-                    Label("Drag & Drop", systemImage: "arrow.down.doc")
-                } description: {
-                    Text("Drop 3D models or Photos here.")
+            if session.activeScanURL == nil && facePhoto == nil && importedModels.isEmpty {
+                VStack(spacing: 20) {
+                    Spacer()
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.secondary)
+                    Text("Start by importing content")
+                        .font(.headline)
+                    
+                    Button("Import 3D Model(s)") {
+                        print("🔘 Empty State 3D Button Pressed")
+                        isImporting3D = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    
+                    Button("Import Photo") {
+                        isImportingPhoto = true
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Text("or Drag & Drop files here")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
                 .frame(maxWidth: .infinity)
                 .background(isTargeted ? Color.blue.opacity(0.1) : Color.clear)
+                
             } else {
                 Picker("Mode", selection: $currentMode) {
                     ForEach(DesignMode.allCases) { mode in
@@ -166,7 +215,6 @@ struct SmileDesignView: View {
             
             Spacer()
             
-            // Status message
             Text(statusMessage)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -176,7 +224,6 @@ struct SmileDesignView: View {
         }
     }
     
-    // Alignment UI
     private var alignmentToolsView: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -184,6 +231,10 @@ struct SmileDesignView: View {
                 Spacer()
                 Button("Done") { showAlignmentUI = false }
             }
+            
+            Text("Select a model in the view to align it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             
             Picker("Type", selection: $alignmentManager.alignmentType) {
                 Text("2D -> 3D").tag(AlignmentManager.AlignmentType.photoToModel)
@@ -212,7 +263,7 @@ struct SmileDesignView: View {
             HStack {
                 Button("Reset") { alignmentManager.reset() }
                 Spacer()
-                Button("Align") {
+                Button("Align Selected") {
                     NotificationCenter.default.post(name: NSNotification.Name("PerformAlignment"), object: nil)
                 }
                 .disabled(alignmentManager.pairs.filter { $0.isComplete }.count < 3)
@@ -222,7 +273,6 @@ struct SmileDesignView: View {
         .background(RoundedRectangle(cornerRadius: 8).stroke(Color.blue))
     }
     
-    // ✅ FIXED: analysisToolsView with proper structure
     private var analysisToolsView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
@@ -234,6 +284,39 @@ struct SmileDesignView: View {
                         Text("Align Models")
                     }.frame(maxWidth: .infinity)
                 }.buttonStyle(.bordered)
+                
+                GroupBox("Models") {
+                    VStack {
+                        if session.activeScanURL != nil {
+                            HStack {
+                                Text("Main Scan").font(.caption).bold()
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                            }
+                        }
+                        
+                        ForEach($importedModels) { $model in
+                            HStack {
+                                Toggle(isOn: $model.isVisible) {
+                                    Text(model.name).font(.caption).lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        Button(action: {
+                            print("🔘 Add Model Button Pressed")
+                            isImporting3D = true
+                        }) {
+                            Label("Add Model", systemImage: "plus")
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 
                 Toggle(isOn: $useStoneMaterial) {
                     Label("Stone Mode", systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal")
@@ -287,16 +370,15 @@ struct SmileDesignView: View {
                                 Text("Reset Markers")
                             }.frame(maxWidth: .infinity)
                         }
+                        .buttonStyle(.bordered).controlSize(.small)
                     }
                 }
                 
-                // ✨ PHOTO REGISTRATION with DEBUG
+                // PHOTO REGISTRATION with DEBUG
                 Divider()
                 
                 GroupBox("Photo Registration") {
                     VStack(alignment: .leading, spacing: 10) {
-                        
-                        // 🐛 DEBUG: Photo Status
                         HStack {
                             Image(systemName: facePhoto == nil ? "xmark.circle.fill" : "checkmark.circle.fill")
                                 .foregroundColor(facePhoto == nil ? .red : .green)
@@ -307,7 +389,6 @@ struct SmileDesignView: View {
                         .background(Color.gray.opacity(0.1))
                         .cornerRadius(4)
                         
-                        // Auto-Register Button
                         Button(action: {
                             print("🎯 FOV Button Pressed!")
                             Task {
@@ -323,20 +404,6 @@ struct SmileDesignView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(facePhoto == nil)
                         
-                        // Display Results
-                        if let fov = alignmentManager.estimatedFOV {
-                            HStack {
-                                Text("Field of View:")
-                                Spacer()
-                                Text(String(format: "%.1f°", fov * 180 / .pi))
-                                    .foregroundColor(.green)
-                                    .bold()
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 4)
-                        }
-                        
-                        // Info Text
                         Text("Uses face landmarks to calculate camera FOV")
                             .font(.caption2)
                             .foregroundColor(.secondary)
@@ -486,6 +553,17 @@ struct SmileDesignView: View {
                 }.frame(maxWidth: .infinity)
             }.buttonStyle(.bordered)
             
+            // Resize Tool
+            if let selected = selectedToothName {
+                Divider()
+                GroupBox("Resize Selected") {
+                    VStack {
+                        Text(selected).font(.caption).bold()
+                        Text("Use mouse scroll or pinch to resize in view").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            
             Divider()
             
             HStack {
@@ -603,6 +681,8 @@ struct SmileDesignView: View {
                             onTap: { point in
                                 if showAlignmentUI && alignmentManager.alignmentType == .photoToModel {
                                     alignmentManager.registerPoint2D(point)
+                                } else {
+                                    markerManager.addLandmark2D(point)
                                 }
                             }
                         )
@@ -618,10 +698,11 @@ struct SmileDesignView: View {
                     }.frame(width: session.activeScanURL != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
                 
-                if let url = session.activeScanURL {
+                if session.activeScanURL != nil || !importedModels.isEmpty {
                     ZStack(alignment: .bottomTrailing) {
                         DesignSceneWrapper(
-                            scanURL: url,
+                            scanURL: session.activeScanURL ?? URL(fileURLWithPath: ""),
+                            importedModels: importedModels,
                             mode: currentMode,
                             showSmileTemplate: (currentMode == .design && templateVisible),
                             smileParams: SmileTemplateParams(
@@ -659,7 +740,7 @@ struct SmileDesignView: View {
                                 alignmentManager.registerPoint3D(point3D)
                             }
                         )
-                        .id(url)
+                        .id(session.activeScanURL?.absoluteString ?? "scene")
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler3D))
                         
                         Button(action: { triggerSnapshot = true }) {
@@ -672,7 +753,7 @@ struct SmileDesignView: View {
                     .frame(width: facePhoto != nil ? geo.size.width * 0.5 : geo.size.width)
                 }
                 
-                if facePhoto == nil && session.activeScanURL == nil {
+                if facePhoto == nil && session.activeScanURL == nil && importedModels.isEmpty {
                     ContentUnavailableView("Drag & Drop", systemImage: "arrow.down.doc.fill")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -725,126 +806,37 @@ struct SmileDesignView: View {
         return nil
     }
     
-    private func handleDroppedContent(_ type: DroppedContentType) {
-        print("🎯 Dropped: \(type)")
-        switch type {
-        case .model3D(let url):
-            session.activeScanURL = url
-            statusMessage = "✅ Loaded Model"
-        case .facePhoto(let image):
-            self.facePhoto = image
-            statusMessage = "✅ Loaded Photo"
-            print("✅ facePhoto set: \(self.facePhoto != nil)")
-        case .libraryItem(let url):
-            handleImportLibrary(.success([url]))
-        case .unknown:
-            break
-        }
-    }
-    
-    private func handleDeleteKey() -> KeyPress.Result {
-        if let name = selectedToothName {
-            let old = toothStates[name] ?? ToothState()
-            history.pushCommand(ToothTransformCommand(
-                toothID: name,
-                oldState: old,
-                newState: ToothState(),
-                applyState: { id, s in toothStates[id] = s }
-            ))
-            toothStates[name] = ToothState()
-            return .handled
-        }
-        if !customCurvePoints.isEmpty {
-            customCurvePoints.removeLast()
-            return .handled
-        }
-        return .ignored
-    }
-    
-    func handleToothDrop(toothID: String, fileURL: URL) {
-        var typeKey = "Central"
-        if toothID.contains("2") {
-            typeKey = "Lateral"
-        } else if toothID.contains("3") {
-            typeKey = "Canine"
-        }
-        toothAssignments[typeKey] = fileURL
-        libraryID = UUID()
-        statusMessage = "✅ Replaced \(typeKey) Shape"
-    }
-    
-    func bindingFor(_ key: String) -> Binding<URL?> {
-        Binding(
-            get: { toothAssignments[key] },
-            set: {
-                if let url = $0 {
-                    toothAssignments[key] = url
-                } else {
-                    toothAssignments.removeValue(forKey: key)
+    // UPDATED: Handle multiple files
+    func handleImport3D(_ result: Result<[URL], Error>) {
+        if case .success(let urls) = result {
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else { continue }
+                defer { url.stopAccessingSecurityScopedResource() }
+                
+                let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                try? FileManager.default.removeItem(at: dst)
+                try? FileManager.default.copyItem(at: url, to: dst)
+                
+                DispatchQueue.main.async {
+                    if session.activeScanURL == nil {
+                        session.activeScanURL = dst
+                    } else {
+                        // Add as extra model
+                        let model = Imported3DModel(url: dst, name: url.lastPathComponent)
+                        self.importedModels.append(model)
+                    }
+                    statusMessage = "✅ Loaded Model(s)"
                 }
-                libraryID = UUID()
-            }
-        )
-    }
-    
-    @MainActor
-    func render2DAnalysis() -> NSImage? {
-        guard let image = facePhoto else { return nil }
-        let renderer = ImageRenderer(content:
-            PhotoAnalysisView(
-                image: image,
-                landmarks: $markerManager.landmarks2D,
-                isPlacing: false,
-                isLocked: true,
-                activeType: nil
-            )
-            .overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D))
-            .frame(width: image.size.width, height: image.size.height)
-        )
-        renderer.scale = 2.0
-        return renderer.nsImage
-    }
-    
-    func handleImport3D(_ result: Result<URL, Error>) {
-        if case .success(let url) = result {
-            guard url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
-            
-            let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.removeItem(at: dst)
-            try? FileManager.default.copyItem(at: url, to: dst)
-            
-            DispatchQueue.main.async {
-                session.activeScanURL = dst
-                statusMessage = "✅ Loaded Model"
             }
         }
     }
     
     func handleImportPhoto(_ result: Result<URL, Error>) {
-        print("📸 handleImportPhoto called")
-        
         if case .success(let url) = result {
-            print("📸 Photo URL: \(url)")
-            
-            guard url.startAccessingSecurityScopedResource() else {
-                print("❌ Could not access security scoped resource")
-                return
-            }
-            
-            defer {
-                url.stopAccessingSecurityScopedResource()
-            }
-            
+            guard url.startAccessingSecurityScopedResource() else { return }
+            defer { url.stopAccessingSecurityScopedResource() }
             if let img = NSImage(contentsOf: url) {
-                print("✅ Image loaded: \(img.size)")
-                DispatchQueue.main.async {
-                    self.facePhoto = img
-                    self.statusMessage = "✅ Loaded Photo"
-                    print("✅ facePhoto set: \(self.facePhoto != nil)")
-                }
-            } else {
-                print("❌ Could not create NSImage")
+                DispatchQueue.main.async { self.facePhoto = img; self.statusMessage = "✅ Loaded Photo" }
             }
         }
     }
@@ -852,27 +844,33 @@ struct SmileDesignView: View {
     func handleImportLibrary(_ result: Result<[URL], Error>) {
         if case .success(let urls) = result {
             var foundFiles: [URL] = []
-            
             func scan(_ url: URL) {
                 let start = url.startAccessingSecurityScopedResource()
                 defer { if start { url.stopAccessingSecurityScopedResource() } }
-                
                 var isDir: ObjCBool = false
                 if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                    if let c = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
-                        for f in c { scan(f) }
-                    }
-                } else if url.pathExtension.lowercased() == "obj" {
-                    foundFiles.append(url)
-                }
+                    if let c = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) { for f in c { scan(f) } }
+                } else if url.pathExtension.lowercased() == "obj" { foundFiles.append(url) }
             }
-            
             for url in urls { scan(url) }
-            
             DispatchQueue.main.async {
-                self.importedFiles = foundFiles
-                self.statusMessage = "✅ Loaded Lib"
+                self.importedFiles = foundFiles; self.statusMessage = "✅ Loaded Lib"
             }
+        }
+    }
+    
+    private func handleDroppedContent(_ type: DroppedContentType) {
+        switch type {
+        case .model3D(let url):
+            session.activeScanURL = url
+            statusMessage = "✅ Loaded Model"
+        case .facePhoto(let image):
+            self.facePhoto = image
+            statusMessage = "✅ Loaded Photo"
+        case .libraryItem(let url):
+            handleImportLibrary(.success([url]))
+        case .unknown:
+            break
         }
     }
     
@@ -898,14 +896,65 @@ struct SmileDesignView: View {
             
             statusMessage = "✅ FOV: \(String(format: "%.1f°", fovDegrees))"
             
-            print("✅ FOV Complete:")
-            print("   FOV: \(String(format: "%.1f°", fovDegrees))")
-            print("   Radians: \(String(format: "%.3f", fov))")
-            
         } catch {
             statusMessage = "❌ Failed: \(error.localizedDescription)"
             print("❌ Error: \(error)")
         }
+    }
+    
+    private func handleDeleteKey() -> KeyPress.Result {
+        if let name = selectedToothName {
+            let old = toothStates[name] ?? ToothState()
+            history.pushCommand(ToothTransformCommand(
+                toothID: name,
+                oldState: old,
+                newState: ToothState(),
+                applyState: { id, s in toothStates[id] = s }
+            ))
+            toothStates[name] = ToothState()
+            return .handled
+        }
+        if !customCurvePoints.isEmpty {
+            customCurvePoints.removeLast()
+            return .handled
+        }
+        return .ignored
+    }
+    
+    func handleToothDrop(toothID: String, fileURL: URL) {
+        var typeKey = "Central"
+        if toothID.contains("2") { typeKey = "Lateral" } else if toothID.contains("3") { typeKey = "Canine" }
+        toothAssignments[typeKey] = fileURL
+        libraryID = UUID()
+        statusMessage = "✅ Replaced \(typeKey) Shape"
+    }
+    
+    func bindingFor(_ key: String) -> Binding<URL?> {
+        Binding(
+            get: { toothAssignments[key] },
+            set: {
+                if let url = $0 { toothAssignments[key] = url } else { toothAssignments.removeValue(forKey: key) }
+                libraryID = UUID()
+            }
+        )
+    }
+    
+    // FIX: Function is now clearly defined inside the struct
+    @MainActor func render2DAnalysis() -> NSImage? {
+        guard let image = facePhoto else { return nil }
+        let renderer = ImageRenderer(content:
+            PhotoAnalysisView(
+                image: image,
+                landmarks: $markerManager.landmarks2D,
+                isPlacing: false,
+                isLocked: true,
+                activeType: nil
+            )
+            .overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D))
+            .frame(width: image.size.width, height: image.size.height)
+        )
+        renderer.scale = 2.0
+        return renderer.nsImage
     }
 }
 

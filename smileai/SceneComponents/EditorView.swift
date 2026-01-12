@@ -1,6 +1,6 @@
 import SceneKit
 import AppKit
-import simd // Explicit import for vector math
+import simd
 
 class EditorView: SCNView {
     
@@ -13,7 +13,7 @@ class EditorView: SCNView {
         didSet { updateCameraLock() }
     }
     
-    // NEW: Alignment State
+    // Alignment State
     var isAlignmentMode: Bool = false
     var onAlignmentPointPicked: ((SCNVector3) -> Void)?
     
@@ -41,9 +41,17 @@ class EditorView: SCNView {
     private var draggingCurveHandleIndex: Int?
     
     // MARK: - Lifecycle
+    
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateSceneRef()
+        
+        // Listen for alignment trigger from SwiftUI
+        NotificationCenter.default.addObserver(self, selector: #selector(executeAlignment), name: NSNotification.Name("PerformAlignment"), object: nil)
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
     
     func updateSceneRef() {
@@ -60,28 +68,56 @@ class EditorView: SCNView {
         }
     }
     
-    // MARK: - API for Automation
-    func project2DPointsTo3D(points: [CGPoint]) -> [SCNVector3] {
-        guard let patientNode = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) else {
-            return points.map { _ in SCNVector3Zero }
+    // MARK: - Alignment Logic
+    
+    @objc func executeAlignment() {
+        // Determine which node to align:
+        // 1. The currently selected node (Tooth or Imported Model)
+        // 2. OR fall back to the main Patient Model
+        let targetNode = selectedToothNode ?? self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true)
+        
+        if let node = targetNode {
+            // Post notification back to DesignSceneWrapper's Coordinator
+            // passing the specific Node and this View (for projection math)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AlignNode"),
+                object: node,
+                userInfo: ["view": self]
+            )
         }
+    }
+    
+    // API for Automation/Alignment Manager to project points
+    func project2DPointsTo3D(points: [CGPoint]) -> [SCNVector3] {
         var results: [SCNVector3] = []
-        let options: [SCNHitTestOption: Any] = [.searchMode: SCNHitTestSearchMode.closest.rawValue, .rootNode: patientNode, .ignoreHiddenNodes: true]
+        let options: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.closest.rawValue,
+            .ignoreHiddenNodes: true
+        ]
+        
         for point in points {
-            if let hit = self.hitTest(point, options: options).first {
+            // Hit test against Patient Model AND Imported Models
+            let hit = self.hitTest(point, options: options).first { result in
+                let name = result.node.name ?? ""
+                return name == "PATIENT_MODEL" || name.starts(with: "IMPORTED_")
+            }
+            
+            if let hit = hit {
                 results.append(hit.worldCoordinates)
             } else {
+                // Fallback: unproject at fixed depth
                 results.append(self.unprojectPoint(SCNVector3(point.x, point.y, 0.1)))
             }
         }
         return results
     }
     
-    // MARK: - Mouse Events
+    // MARK: - Interaction / Gestures
+    
     override func mouseDown(with event: NSEvent) {
         let loc = self.convert(event.locationInWindow, from: nil)
         
-        // Alignment Picking (High Priority)
+        // 1. Alignment Picking (Highest Priority)
         if isAlignmentMode {
             if let point = resolveSmartPoint(location: loc) {
                 addDebugMarker(at: point, color: .green)
@@ -90,10 +126,13 @@ class EditorView: SCNView {
             return
         }
         
-        let hitOptions: [SCNHitTestOption: Any] = [.searchMode: SCNHitTestSearchMode.closest.rawValue, .ignoreHiddenNodes: true]
+        let hitOptions: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.closest.rawValue,
+            .ignoreHiddenNodes: true
+        ]
         let hitResults = self.hitTest(loc, options: hitOptions)
         
-        // Gizmo
+        // 2. Gizmo Interaction
         if let _ = hitResults.first(where: { $0.node.name == "GIZMO_ROTATE_HANDLE" }) {
             isRotatingTooth = true
             dragStartPosition = loc
@@ -101,7 +140,7 @@ class EditorView: SCNView {
             return
         }
         
-        // Curve
+        // 3. Curve Editing
         if !curveEditor.isLocked {
             let curveHits = self.hitTest(loc, options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
             if let hit = curveHits.first(where: { $0.node.name?.starts(with: "CURVE_HANDLE_") == true }),
@@ -117,7 +156,7 @@ class EditorView: SCNView {
             }
         }
         
-        // Drawing
+        // 4. Drawing Curve
         if isDrawingCurve && !curveEditor.isLocked && !curveEditor.isClosed {
             if let point = resolveSmartPoint(location: loc) {
                 curveEditor.handleClick(at: point)
@@ -125,7 +164,7 @@ class EditorView: SCNView {
             return
         }
         
-        // Selection/Analysis
+        // 5. Selection / Analysis
         switch currentMode {
         case .analysis:
             if isPlacingLandmarks, let point = resolveSmartPoint(location: loc) {
@@ -133,8 +172,13 @@ class EditorView: SCNView {
             } else {
                 super.mouseDown(with: event)
             }
+            
         case .design:
-            if let hit = hitResults.first(where: { $0.node.name?.starts(with: "T_") == true }) {
+            // Check for Tooth ("T_") OR Imported Model ("IMPORTED_")
+            if let hit = hitResults.first(where: {
+                ($0.node.name?.starts(with: "T_") ?? false) ||
+                ($0.node.name?.starts(with: "IMPORTED_") ?? false)
+            }) {
                 selectTooth(hit.node)
             } else {
                 deselectTooth()
@@ -148,6 +192,7 @@ class EditorView: SCNView {
     override func mouseDragged(with event: NSEvent) {
         let loc = self.convert(event.locationInWindow, from: nil)
         
+        // Curve Point Dragging
         if let index = draggingCurveHandleIndex {
             if let point = resolveSmartPoint(location: loc) {
                 curveEditor.updatePoint(index: index, position: point)
@@ -155,16 +200,29 @@ class EditorView: SCNView {
             return
         }
         
+        // Gizmo Rotation
         if isRotatingTooth, let tooth = selectedToothNode, let start = dragStartPosition {
-            let dx = CGFloat(loc.x - start.x); let dy = CGFloat(loc.y - start.y)
-            tooth.eulerAngles.y += dy * 0.01; tooth.eulerAngles.x += dx * 0.01
+            let dx = CGFloat(loc.x - start.x)
+            let dy = CGFloat(loc.y - start.y)
+            
+            // Adjust rotation based on drag
+            tooth.eulerAngles.y += dy * 0.01
+            tooth.eulerAngles.x += dx * 0.01
+            
+            // Update Gizmo
             self.gizmo?.position = tooth.worldPosition
-            let state = currentToothStates[tooth.name!] ?? ToothState()
-            onToothTransformChange?(tooth.name!, state)
+            
+            // Notify changes (only for teeth logic)
+            if let name = tooth.name, name.starts(with: "T_") {
+                let state = currentToothStates[name] ?? ToothState()
+                onToothTransformChange?(name, state)
+            }
+            
             dragStartPosition = loc
             return
         }
         
+        // Standard Camera Control
         if !isRotatingTooth && draggingCurveHandleIndex == nil {
             super.mouseDragged(with: event)
         }
@@ -178,16 +236,44 @@ class EditorView: SCNView {
         super.mouseUp(with: event)
     }
     
+    // MARK: - Resizing Gesture
+    
+    override func magnify(with event: NSEvent) {
+        // Only allow resizing of Imported Models
+        if let node = selectedToothNode, (node.name?.starts(with: "IMPORTED_") ?? false) {
+            let scaleFactor = 1.0 + event.magnification
+            let current = node.scale
+            node.scale = SCNVector3(
+                current.x * CGFloat(scaleFactor),
+                current.y * CGFloat(scaleFactor),
+                current.z * CGFloat(scaleFactor)
+            )
+        } else {
+            // Otherwise, pass to super (zooms camera)
+            super.magnify(with: event)
+        }
+    }
+    
     // MARK: - Drag Drop
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { return .copy }
+    
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        return .copy
+    }
+    
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let result = ToothDropHandler.handleDrop(in: self, sender: sender, curvePoints: curveEditor.points) else { return false }
+        
         switch result.target {
-        case .existingTooth(let id): onToothDrop?(id, result.url)
+        case .existingTooth(let id):
+            onToothDrop?(id, result.url)
         case .curvePoint(let pos, let rot):
-            if let nearest = findNearestTooth(to: pos) { onDropCollision?(nearest, result.url, pos, rot) }
-            else { onToothAdd?(result.url, pos, rot) }
-        case .background: return false
+            if let nearest = findNearestTooth(to: pos) {
+                onDropCollision?(nearest, result.url, pos, rot)
+            } else {
+                onToothAdd?(result.url, pos, rot)
+            }
+        case .background:
+            return false
         }
         return true
     }
@@ -200,23 +286,33 @@ class EditorView: SCNView {
         let node = SCNNode(geometry: sphere)
         node.position = pos
         self.scene?.rootNode.addChildNode(node)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { node.removeFromParentNode() }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            node.removeFromParentNode()
+        }
     }
     
     private func selectTooth(_ node: SCNNode) {
         selectedToothNode = node
         onToothSelected?(node.name)
+        
+        // Remove old gizmo
         self.scene?.rootNode.childNode(withName: "MANIPULATION_GIZMO", recursively: true)?.removeFromParentNode()
+        
+        // Add new gizmo
         let (min, max) = node.boundingBox
         let newGizmo = FreeRotateGizmo(boundMin: min, boundMax: max)
         newGizmo.position = node.worldPosition
         self.scene?.rootNode.addChildNode(newGizmo)
         self.gizmo = newGizmo
+        
         highlightTooth(node, highlighted: true)
     }
     
     private func deselectTooth() {
-        if let tooth = selectedToothNode { highlightTooth(tooth, highlighted: false) }
+        if let tooth = selectedToothNode {
+            highlightTooth(tooth, highlighted: false)
+        }
         selectedToothNode = nil
         self.scene?.rootNode.childNode(withName: "MANIPULATION_GIZMO", recursively: true)?.removeFromParentNode()
         self.gizmo = nil
@@ -224,7 +320,18 @@ class EditorView: SCNView {
     }
     
     private func highlightTooth(_ node: SCNNode, highlighted: Bool) {
-        node.geometry?.materials.forEach { $0.emission.contents = highlighted ? NSColor.cyan : NSColor.black }
+        // Visual feedback
+        if node.name?.starts(with: "T_") == true {
+            // Teeth glow cyan
+            node.geometry?.materials.forEach {
+                $0.emission.contents = highlighted ? NSColor.cyan : NSColor.black
+            }
+        } else if node.name?.starts(with: "IMPORTED_") == true {
+            // Imported models glow white/grey
+            node.geometry?.materials.forEach {
+                $0.emission.contents = highlighted ? NSColor(white: 0.3, alpha: 1.0) : NSColor.black
+            }
+        }
     }
     
     private func findNearestTooth(to pos: SCNVector3) -> String? {
@@ -234,13 +341,10 @@ class EditorView: SCNView {
         self.scene?.rootNode.enumerateChildNodes { node, _ in
             guard let name = node.name, name.starts(with: "T_") else { return }
             
-            // FIX: Explicit cast to Float for SIMD compatibility
-            // macOS uses CGFloat for SCNVector3, but SIMD requires Float
             let nPos = node.worldPosition
-            let tPos = pos
-            
+            // SIMD conversion for distance calc
             let simdA = SIMD3<Float>(Float(nPos.x), Float(nPos.y), Float(nPos.z))
-            let simdB = SIMD3<Float>(Float(tPos.x), Float(tPos.y), Float(tPos.z))
+            let simdB = SIMD3<Float>(Float(pos.x), Float(pos.y), Float(pos.z))
             
             let dist = simd_distance(simdA, simdB)
             
@@ -254,21 +358,43 @@ class EditorView: SCNView {
     
     private func resolveSmartPoint(location: CGPoint) -> SCNVector3? {
         guard let scene = self.scene else { return nil }
-        let options: [SCNHitTestOption: Any] = [.searchMode: SCNHitTestSearchMode.closest.rawValue, .rootNode: scene.rootNode, .ignoreHiddenNodes: true]
-        if let hit = self.hitTest(location, options: options).first(where: { $0.node.name == "PATIENT_MODEL" }) {
+        
+        let options: [SCNHitTestOption: Any] = [
+            .searchMode: SCNHitTestSearchMode.closest.rawValue,
+            .rootNode: scene.rootNode,
+            .ignoreHiddenNodes: true
+        ]
+        
+        // Hit test against Patient Model OR Imported Models
+        let hit = self.hitTest(location, options: options).first { result in
+            let name = result.node.name ?? ""
+            return name == "PATIENT_MODEL" || name.starts(with: "IMPORTED_")
+        }
+        
+        if let hit = hit {
             return hit.worldCoordinates
         }
+        
+        // Fallback: Project onto plane
         return projectToCameraFacingPlane(location: location)
     }
     
     private func projectToCameraFacingPlane(location: CGPoint) -> SCNVector3? {
         guard let _ = self.pointOfView else { return nil }
+        
+        // Default depth: approximate center of patient model
         var centerPos = SCNVector3Zero
-        if let model = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) { centerPos = model.worldPosition }
+        if let model = self.scene?.rootNode.childNode(withName: "PATIENT_MODEL", recursively: true) {
+            centerPos = model.worldPosition
+        }
+        
         let near = self.unprojectPoint(SCNVector3(location.x, location.y, 0))
         let far = self.unprojectPoint(SCNVector3(location.x, location.y, 1))
-        let dir = SCNVector3(far.x-near.x, far.y-near.y, far.z-near.z)
-        if abs(dir.z) < 0.0001 { return nil }
+        
+        let dir = SCNVector3(far.x - near.x, far.y - near.y, far.z - near.z)
+        
+        if abs(dir.z) < 0.0001 { return nil } // Avoid divide by zero if parallel
+        
         let t = (centerPos.z - near.z) / dir.z
         return SCNVector3(near.x + dir.x * t, near.y + dir.y * t, centerPos.z)
     }
