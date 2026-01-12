@@ -752,6 +752,7 @@ struct SmileDesignView: View {
                             isPlacing: markerManager.isPlacingMode,
                             isLocked: markerManager.isLocked,
                             activeType: markerManager.nextLandmark(hasFacePhoto: true),
+                            enabledGuides: $enabledGuides,
                             onTap: { point in
                                 if showAlignmentUI && alignmentManager.alignmentType == .photoToModel {
                                     alignmentManager.registerPoint2D(point)

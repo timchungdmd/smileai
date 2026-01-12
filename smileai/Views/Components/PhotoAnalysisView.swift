@@ -13,15 +13,9 @@ struct PhotoAnalysisView: View {
     // NEW: Optional tap handler for alignment
     var onTap: ((CGPoint) -> Void)? = nil
 
-    // NEW: Proportional guides
-    @State private var enabledGuides: Set<GuideType> = [
-        .facialMidline,
-        .dentalMidline,
-        .goldenProportion,
-        .smileWidth
-    ]
-    @State private var showGuidesSettings = false
-    
+    // Proportional guides (controlled by parent view)
+    @Binding var enabledGuides: Set<GuideType>
+
     @State private var dragOffset: CGSize = .zero
     @State private var currentMagnification: CGFloat = 1.0
     @State private var position: CGSize = .zero
@@ -111,30 +105,9 @@ struct PhotoAnalysisView: View {
                             )
                     }
                 }
-
-                // 4. Guide Settings Button
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button(action: { showGuidesSettings.toggle() }) {
-                            Image(systemName: "slider.horizontal.3")
-                                .padding(8)
-                                .background(Color.black.opacity(0.5))
-                                .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Proportional Guides Settings")
-                        .padding()
-                    }
-                    Spacer()
-                }
             }
             .clipped()
             .background(Color.black)
-            .popover(isPresented: $showGuidesSettings) {
-                GuideSettingsView(enabledGuides: $enabledGuides)
-                    .frame(width: 400, height: 600)
-            }
         }
     }
 
