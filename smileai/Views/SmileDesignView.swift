@@ -85,13 +85,39 @@ struct SmileDesignView: View {
     // MARK: - BODY
     var body: some View {
         HStack(spacing: 0) {
+            // 1. Sidebar with its own Importers
             sidebarView
                 .frame(width: 340)
                 .padding()
                 .background(Color(nsColor: .windowBackgroundColor))
+                .fileImporter(
+                    isPresented: $isImporting3D,
+                    allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj, UTType.data],
+                    allowsMultipleSelection: true
+                ) { (result: Result<[URL], Error>) in
+                    print("📦 3D Import Result: \(result)")
+                    handle3DModelImport(result)
+                }
+                .fileImporter(
+                    isPresented: $isImportingLibrary,
+                    allowedContentTypes: [UTType.folder, UTType.obj],
+                    allowsMultipleSelection: true
+                ) { (result: Result<[URL], Error>) in
+                    handleImportLibrary(result)
+                }
             
+            // 2. Main Content with Photo Importer (Single Selection Overload)
             mainContentView
+                .fileImporter(
+                    isPresented: $isImportingPhoto,
+                    allowedContentTypes: [UTType.image, UTType.jpeg, UTType.png, UTType.heic]
+                    // FIX: Removed `allowsMultipleSelection: false` to target the single-file overload
+                ) { (result: Result<URL, Error>) in
+                    print("📸 Photo Import Result: \(result)")
+                    handleImportPhoto(result)
+                }
         }
+        // 3. Global Modifiers
         .focusable()
         .onKeyPress(phases: .down) { press in
             if press.key == "z" && press.modifiers.contains(.command) {
@@ -106,19 +132,7 @@ struct SmileDesignView: View {
                 handleDroppedContent(type)
             }
         }
-        .fileImporter(isPresented: $isImporting3D, allowedContentTypes: [UTType.usdz, UTType.stl, UTType.obj], allowsMultipleSelection: true) { res in
-            print("📦 3D Import Result: \(res)")
-            handleImport3D(res)
-        }
-        .fileImporter(isPresented: $isImportingPhoto, allowedContentTypes: [UTType.jpeg, UTType.png, UTType.heic]) { res in
-            print("📸 Photo Import Result: \(res)")
-            handleImportPhoto(res)
-        }
-        .fileImporter(isPresented: $isImportingLibrary, allowedContentTypes: [UTType.folder, UTType.obj], allowsMultipleSelection: true) { res in
-            handleImportLibrary(res)
-        }
         .fileExporter(isPresented: $isExporting, document: GenericFile(sourceURL: session.activeScanURL), contentType: UTType.data, defaultFilename: "Project3D") { _ in }
-        // FIX: render2DAnalysis() is called here, defined below
         .fileExporter(isPresented: $isExporting2D, document: ImageFile(image: render2DAnalysis()), contentType: .png, defaultFilename: "Analysis_Snapshot") { _ in }
         .sheet(isPresented: $show2DOverlaySheet) {
             Smile2DOverlaySheet(state: smileOverlayState, isPresented: $show2DOverlaySheet)
@@ -158,7 +172,10 @@ struct SmileDesignView: View {
                     Image(systemName: "cube").help("Import 3D Model")
                 }.buttonStyle(.plain)
                 
-                Button(action: { isImportingPhoto = true }) {
+                Button(action: {
+                    print("🔘 Top Photo Import Button Pressed")
+                    isImportingPhoto = true
+                }) {
                     Image(systemName: "photo").help("Import Photo")
                 }.buttonStyle(.plain).padding(.leading, 8)
             }.padding(.top)
@@ -181,6 +198,7 @@ struct SmileDesignView: View {
                     .buttonStyle(.borderedProminent)
                     
                     Button("Import Photo") {
+                        print("🔘 Empty State Photo Button Pressed")
                         isImportingPhoto = true
                     }
                     .buttonStyle(.bordered)
@@ -806,11 +824,15 @@ struct SmileDesignView: View {
         return nil
     }
     
-    // UPDATED: Handle multiple files
-    func handleImport3D(_ result: Result<[URL], Error>) {
+    // UPDATED: Handle multiple files (Renamed to avoid conflict)
+    func handle3DModelImport(_ result: Result<[URL], Error>) {
         if case .success(let urls) = result {
+            print("✅ handle3DModelImport Success: \(urls.count) files")
             for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
+                guard url.startAccessingSecurityScopedResource() else {
+                    print("❌ Security Scope Failed: \(url)")
+                    continue
+                }
                 defer { url.stopAccessingSecurityScopedResource() }
                 
                 let dst = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
@@ -828,6 +850,8 @@ struct SmileDesignView: View {
                     statusMessage = "✅ Loaded Model(s)"
                 }
             }
+        } else if case .failure(let error) = result {
+            print("❌ handle3DModelImport Failure: \(error.localizedDescription)")
         }
     }
     
@@ -860,6 +884,7 @@ struct SmileDesignView: View {
     }
     
     private func handleDroppedContent(_ type: DroppedContentType) {
+        print("🎯 Dropped: \(type)")
         switch type {
         case .model3D(let url):
             session.activeScanURL = url
@@ -867,6 +892,7 @@ struct SmileDesignView: View {
         case .facePhoto(let image):
             self.facePhoto = image
             statusMessage = "✅ Loaded Photo"
+            print("✅ facePhoto set: \(self.facePhoto != nil)")
         case .libraryItem(let url):
             handleImportLibrary(.success([url]))
         case .unknown:
@@ -939,7 +965,6 @@ struct SmileDesignView: View {
         )
     }
     
-    // FIX: Function is now clearly defined inside the struct
     @MainActor func render2DAnalysis() -> NSImage? {
         guard let image = facePhoto else { return nil }
         let renderer = ImageRenderer(content:
