@@ -48,6 +48,13 @@ struct SmileDesignView: View {
     @State private var ruler3D = GoldenRulerState()
     @State private var selectedRatioType: Int = 0
     @State private var isDrawingCurve: Bool = false
+
+    // New exocad-competing features state
+    @State private var showArticulator: Bool = false
+    @State private var waxUpPhase: WaxUpPhase = .diagnostic
+    @State private var selectedToothPreset: ToothMorphologyPreset? = nil
+    @State private var enabledGuides: Set<GuideType> = [.facialMidline, .dentalMidline, .goldenProportion, .smileWidth]
+    @State private var showGuideSettings: Bool = false
     @State private var isCurveLocked: Bool = false
     @State private var customCurvePoints: [SCNVector3] = []
     @State private var useStoneMaterial: Bool = false
@@ -508,6 +515,29 @@ struct SmileDesignView: View {
                         }
                     }
                 }
+
+                // PROPORTIONAL GUIDES
+                Divider()
+                GroupBox("Proportional Guides") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Professional facial proportion analysis")
+                            .font(.caption2).foregroundStyle(.secondary)
+
+                        Button(action: { showGuideSettings.toggle() }) {
+                            HStack {
+                                Image(systemName: "ruler.fill")
+                                Text("Configure Guides (\(enabledGuides.count) active)")
+                                Spacer()
+                                Image(systemName: showGuideSettings ? "chevron.up" : "chevron.down")
+                            }.frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered)
+
+                        if showGuideSettings {
+                            GuideSettingsView(enabledGuides: $enabledGuides)
+                                .padding(.top, 5)
+                        }
+                    }
+                }
             }
             .padding(.trailing, 5)
         }
@@ -654,9 +684,20 @@ struct SmileDesignView: View {
                 toothLength: $toothLength,
                 toothRatio: $toothRatio
             )
-            
+
             Divider()
-            
+
+            // Advanced Smile Studio Tools (competing with exocad Smile Creator)
+            Text("Advanced Tools").font(.headline)
+            SmileStudioToolsView(
+                facePhoto: $facePhoto,
+                selectedToothPreset: $selectedToothPreset,
+                waxUpPhase: $waxUpPhase,
+                showArticulator: $showArticulator
+            )
+
+            Divider()
+
             Button(action: {
                 Task {
                     let results = await automationManager.runAutoDesign(
@@ -703,6 +744,14 @@ struct SmileDesignView: View {
                                     markerManager.addLandmark2D(point)
                                 }
                             }
+                        )
+                        .overlay(
+                            // Proportional Guides Overlay
+                            ProportionalGuidesView(
+                                landmarks: convertLandmarksToFacialLandmarks(),
+                                imageSize: image.size,
+                                enabledGuides: enabledGuides
+                            )
                         )
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
                         .background(Color.black)
@@ -980,6 +1029,40 @@ struct SmileDesignView: View {
         )
         renderer.scale = 2.0
         return renderer.nsImage
+    }
+
+    // MARK: - Helper for Proportional Guides
+    private func convertLandmarksToFacialLandmarks() -> FacialLandmarks? {
+        guard !markerManager.landmarks2D.isEmpty else { return nil }
+
+        // Convert dictionary of landmarks to FacialLandmarks structure
+        var facialLandmarks = FacialLandmarks(
+            leftPupil: .zero,
+            rightPupil: .zero,
+            noseTip: .zero,
+            leftMouthCorner: .zero,
+            rightMouthCorner: .zero
+        )
+
+        for (type, point) in markerManager.landmarks2D {
+            let cgPoint = CGPoint(x: point.x, y: point.y)
+            switch type {
+            case .leftPupil:
+                facialLandmarks.leftPupil = cgPoint
+            case .rightPupil:
+                facialLandmarks.rightPupil = cgPoint
+            case .noseTip:
+                facialLandmarks.noseTip = cgPoint
+            case .leftCommissure:
+                facialLandmarks.leftMouthCorner = cgPoint
+            case .rightCommissure:
+                facialLandmarks.rightMouthCorner = cgPoint
+            default:
+                break
+            }
+        }
+
+        return facialLandmarks
     }
 }
 
