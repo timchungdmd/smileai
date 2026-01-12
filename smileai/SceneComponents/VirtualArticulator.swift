@@ -102,7 +102,7 @@ class VirtualArticulator {
                     y: Float(-t * Double(settings.condylarAngle) * 0.1),
                     z: 0
                 )
-                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3.zero))
+                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3(0, 0, 0)))
             }
 
         case .retrusion:
@@ -114,7 +114,7 @@ class VirtualArticulator {
                     y: Float(-t * Double(settings.condylarAngle) * 0.1),
                     z: 0
                 )
-                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3.zero))
+                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3(0, 0, 0)))
             }
 
         case .lateralRight:
