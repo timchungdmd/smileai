@@ -1036,13 +1036,8 @@ struct SmileDesignView: View {
         guard !markerManager.landmarks2D.isEmpty else { return nil }
 
         // Convert dictionary of landmarks to FacialLandmarks structure
-        var facialLandmarks = FacialLandmarks(
-            leftPupil: .zero,
-            rightPupil: .zero,
-            noseTip: .zero,
-            leftMouthCorner: .zero,
-            rightMouthCorner: .zero
-        )
+        // Initialize with nil values (not .zero) so guards work properly
+        var facialLandmarks = FacialLandmarks()
 
         for (type, point) in markerManager.landmarks2D {
             let cgPoint = CGPoint(x: point.x, y: point.y)
@@ -1057,9 +1052,20 @@ struct SmileDesignView: View {
                 facialLandmarks.leftMouthCorner = cgPoint
             case .rightCommissure:
                 facialLandmarks.rightMouthCorner = cgPoint
+            case .upperLipCenter:
+                facialLandmarks.upperLipCenter = cgPoint
+            case .lowerLipCenter:
+                facialLandmarks.lowerLipCenter = cgPoint
+            case .menton:
+                facialLandmarks.chin = cgPoint
             default:
                 break
             }
+        }
+
+        // CRITICAL: Must have both pupils for guides to work
+        guard facialLandmarks.leftPupil != nil && facialLandmarks.rightPupil != nil else {
+            return nil
         }
 
         return facialLandmarks
