@@ -10,9 +10,9 @@ import Vision
 import AppKit
 
 class FaceDetectionService {
-    
+
     // MARK: - Main Detection Method
-    
+
     /// Detect facial landmarks from photo using Vision framework
     static func detectLandmarks(in image: NSImage) async throws -> FacialLandmarks? {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
@@ -135,8 +135,49 @@ class FaceDetectionService {
         drawPoint(landmarks.rightMouthCorner)
         
         outputImage.unlockFocus()
-        
+
         return outputImage
+    }
+
+    // MARK: - Enhanced AI-Powered Analysis
+
+    /// Perform comprehensive facial analysis including smile line detection
+    static func performEnhancedAnalysis(in image: NSImage) async throws -> EnhancedFacialAnalysis? {
+        // First detect basic landmarks
+        guard let landmarks = try await detectLandmarks(in: image) else {
+            return nil
+        }
+
+        let imageSize = image.size
+
+        // Detect smile line
+        let smileLine = SmileLineDetectionService.detectSmileLine(
+            from: landmarks,
+            imageSize: imageSize
+        )
+
+        // Predict tooth positions
+        var toothPositions: [ToothPosition] = []
+        if let smileLine = smileLine {
+            toothPositions = SmileLineDetectionService.predictToothPositions(
+                from: smileLine,
+                landmarks: landmarks
+            )
+        }
+
+        // Analyze facial proportions
+        let proportions = SmileLineDetectionService.analyzeFacialProportions(landmarks: landmarks)
+
+        // Detect asymmetry
+        let asymmetry = SmileLineDetectionService.detectSmileAsymmetry(landmarks: landmarks)
+
+        return EnhancedFacialAnalysis(
+            landmarks: landmarks,
+            smileLine: smileLine,
+            predictedToothPositions: toothPositions,
+            facialProportions: proportions,
+            smileAsymmetry: asymmetry
+        )
     }
 }
 
@@ -200,6 +241,16 @@ extension FacialLandmarks {
         
         return result
     }
+}
+
+// MARK: - Enhanced Analysis Result
+
+struct EnhancedFacialAnalysis {
+    var landmarks: FacialLandmarks
+    var smileLine: SmileLine?
+    var predictedToothPositions: [ToothPosition]
+    var facialProportions: FacialProportions?
+    var smileAsymmetry: SmileAsymmetry?
 }
 
 // MARK: - Errors
