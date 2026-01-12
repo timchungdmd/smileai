@@ -21,7 +21,7 @@ struct IdealSmileDimensions {
 
     // Reference measurements used
     var interpupillaryDistance: CGFloat
-    var bizygomatic Width: CGFloat
+    var bizygomaticWidth: CGFloat
     var facialWidth: CGFloat
 
     // Tooth proportions (Central:Lateral:Canine)
@@ -76,7 +76,7 @@ class IdealSmileDimensionsCalculator {
         let pixelsPerMM = ipd / averageIPDmm
 
         // Calculate bizygomatic width (approximation based on IPD)
-        let bizygomatic = calculateBizygomatic Width(ipd: ipd)
+        let bizygomatic = calculateBizygomaticWidth(ipd: ipd)
 
         // Calculate facial width (from image bounds)
         let facialWidth = imageSize.width
@@ -121,7 +121,7 @@ class IdealSmileDimensionsCalculator {
             idealCanineWidth: idealCanineWidth,
             idealSmileWidth: idealSmileWidth,
             interpupillaryDistance: ipd,
-            bizygomatic Width: bizygomatic,
+            bizygomaticWidth: bizygomatic,
             facialWidth: facialWidth,
             toothProportions: proportions,
             goldenProportionScore: goldenScore,
@@ -141,7 +141,7 @@ class IdealSmileDimensionsCalculator {
 
     /// Calculate bizygomatic width (approximation)
     /// Bizygomatic width ≈ IPD × 2.0 (average facial proportion)
-    private static func calculateBizygomatic Width(ipd: CGFloat) -> CGFloat {
+    private static func calculateBizygomaticWidth(ipd: CGFloat) -> CGFloat {
         return ipd * 2.0
     }
 
