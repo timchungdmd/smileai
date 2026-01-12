@@ -194,7 +194,7 @@ class VirtualWaxUpManager {
             fdiNumber: number,
             morphology: preset.parameters,
             position: position,
-            rotation: SCNVector3.zero,
+            rotation: SCNVector3(0, 0, 0),
             scale: SCNVector3(1, 1, 1),
             shade: "A2"
         )
@@ -276,10 +276,10 @@ class VirtualWaxUpManager {
     // MARK: - Finalization Phase
 
     /// Validate wax-up design
-    func validateDesign() -> ValidationReport {
+    func validateDesign() -> WaxUpValidationReport {
         guard let waxUpDesign = waxUpDesign,
               let diagnostic = diagnostic else {
-            return ValidationReport(isValid: false, errors: ["Missing design data"], warnings: [])
+            return WaxUpValidationReport(isValid: false, errors: ["Missing design data"], warnings: [])
         }
 
         var errors: [String] = []
@@ -296,7 +296,7 @@ class VirtualWaxUpManager {
                 errors.append("Occlusal interference detected")
             }
 
-            if occlusalCheck.hasInsufficient Contact {
+            if occlusalCheck.hasInsufficientContact {
                 warnings.append("Insufficient occlusal contacts")
             }
         }
@@ -319,7 +319,7 @@ class VirtualWaxUpManager {
             errors.append("Incomplete margin definition")
         }
 
-        return ValidationReport(
+        return WaxUpValidationReport(
             isValid: errors.isEmpty,
             errors: errors,
             warnings: warnings
@@ -516,7 +516,7 @@ struct WaxUpSnapshot {
     var modifications: [WaxUpModification]
 }
 
-struct ValidationReport {
+struct WaxUpValidationReport {
     var isValid: Bool
     var errors: [String]
     var warnings: [String]
