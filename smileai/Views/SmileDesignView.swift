@@ -553,6 +553,86 @@ struct SmileDesignView: View {
                         }
                     }
                 }
+
+                // IDEAL SMILE DIMENSIONS
+                Divider()
+                GroupBox("Ideal Smile Dimensions") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Calculated theoretical ideal dimensions based on facial proportions")
+                            .font(.caption2).foregroundStyle(.secondary)
+
+                        if let facialLandmarks = convertLandmarksToFacialLandmarks(),
+                           let idealDims = IdealSmileDimensionsCalculator.calculate(from: facialLandmarks, imageSize: facePhoto?.size ?? .zero) {
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Reference Measurements")
+                                    .font(.caption).bold().foregroundColor(.blue)
+
+                                MeasurementRow(
+                                    label: "IPD",
+                                    value: IdealSmileDimensionsCalculator.formatMeasurement(idealDims.interpupillaryDistance, pixelsPerMM: idealDims.pixelsPerMM),
+                                    color: .blue
+                                )
+
+                                Divider()
+
+                                Text("Ideal Tooth Dimensions")
+                                    .font(.caption).bold().foregroundColor(.green)
+
+                                MeasurementRow(
+                                    label: "Canine-Canine Width",
+                                    value: IdealSmileDimensionsCalculator.formatMeasurement(idealDims.idealCanineToCanineWidth, pixelsPerMM: idealDims.pixelsPerMM),
+                                    color: .green
+                                )
+
+                                MeasurementRow(
+                                    label: "Central Incisor",
+                                    value: IdealSmileDimensionsCalculator.formatMeasurement(idealDims.idealCentralIncisorWidth, pixelsPerMM: idealDims.pixelsPerMM),
+                                    color: .green
+                                )
+
+                                MeasurementRow(
+                                    label: "Lateral Incisor",
+                                    value: IdealSmileDimensionsCalculator.formatMeasurement(idealDims.idealLateralIncisorWidth, pixelsPerMM: idealDims.pixelsPerMM),
+                                    color: .green
+                                )
+
+                                MeasurementRow(
+                                    label: "Canine",
+                                    value: IdealSmileDimensionsCalculator.formatMeasurement(idealDims.idealCanineWidth, pixelsPerMM: idealDims.pixelsPerMM),
+                                    color: .green
+                                )
+
+                                Divider()
+
+                                Text("Proportion Analysis")
+                                    .font(.caption).bold()
+
+                                HStack {
+                                    Text("Quality:")
+                                        .font(.caption2)
+                                    Text(idealDims.proportionQuality.rawValue)
+                                        .font(.caption2).bold()
+                                        .foregroundColor(idealDims.proportionQuality == .excellent ? .green :
+                                                        idealDims.proportionQuality == .good ? .blue : .orange)
+                                    Spacer()
+                                    Text("\(Int(idealDims.goldenProportionScore))%")
+                                        .font(.caption2).bold()
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Text("Based on Golden Ratio (φ = 1.618)")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            .font(.caption)
+                        } else {
+                            Text("Place both pupils to calculate ideal dimensions")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .padding(.vertical, 8)
+                        }
+                    }
+                }
             }
             .padding(.trailing, 5)
         }
@@ -1030,7 +1110,8 @@ struct SmileDesignView: View {
                 landmarks: $markerManager.landmarks2D,
                 isPlacing: false,
                 isLocked: true,
-                activeType: nil
+                activeType: nil,
+                enabledGuides: $enabledGuides
             )
             .overlay(GoldenRulerOverlay(isActive: false, isLocked: true, state: $ruler2D))
             .frame(width: image.size.width, height: image.size.height)
@@ -1159,6 +1240,27 @@ struct ToothDropSlot: View {
             try fileManager.copyItem(at: url, to: dst)
             return dst
         } catch { return nil }
+    }
+}
+
+// MARK: - Helper View for Measurements
+
+struct MeasurementRow: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+                .font(.caption2)
+                .bold()
+                .foregroundColor(color)
+        }
     }
 }
 
