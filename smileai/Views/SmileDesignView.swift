@@ -356,7 +356,22 @@ struct SmileDesignView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(markerManager.getCurrentPrompt(hasFacePhoto: facePhoto != nil))
                             .font(.caption).bold().foregroundStyle(.blue)
-                        
+
+                        // Warning when alignment mode blocks marker placement
+                        if facePhoto != nil && showAlignmentUI && alignmentManager.alignmentType == .photoToModel {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.caption)
+                                Text("Alignment mode is blocking marker placement")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(6)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+
                         HStack {
                             Toggle(isOn: $markerManager.isPlacingMode) {
                                 Label("Place", systemImage: "target")
@@ -744,14 +759,6 @@ struct SmileDesignView: View {
                                     markerManager.addLandmark2D(point)
                                 }
                             }
-                        )
-                        .overlay(
-                            // Proportional Guides Overlay
-                            ProportionalGuidesView(
-                                landmarks: convertLandmarksToFacialLandmarks(),
-                                imageSize: image.size,
-                                enabledGuides: enabledGuides
-                            )
                         )
                         .overlay(GoldenRulerOverlay(isActive: isRulerToolActive, isLocked: isRulerLocked, state: $ruler2D))
                         .background(Color.black)
