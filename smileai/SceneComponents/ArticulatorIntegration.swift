@@ -7,7 +7,9 @@
 
 import Foundation
 import SceneKit
+import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 /// Manages integration of Virtual Articulator with the 3D scene
 @Observable

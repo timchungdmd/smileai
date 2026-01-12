@@ -207,7 +207,7 @@ class SmileLineDetectionService {
         return positions
     }
 
-    private static func classifyToothType(index: Int) -> ToothType {
+    private static func classifyToothType(index: Int) -> PredictedToothType {
         switch index {
         case 0, 5: return .canine
         case 1, 4: return .lateralIncisor
@@ -321,10 +321,10 @@ struct ToothPosition {
     var number: Int
     var center: CGPoint
     var width: CGFloat
-    var toothType: ToothType
+    var toothType: PredictedToothType
 }
 
-enum ToothType: String {
+enum PredictedToothType: String {
     case centralIncisor = "Central Incisor"
     case lateralIncisor = "Lateral Incisor"
     case canine = "Canine"
