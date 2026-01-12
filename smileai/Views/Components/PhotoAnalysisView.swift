@@ -29,23 +29,37 @@ struct PhotoAnalysisView: View {
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(currentMagnification)
                     .offset(position + dragOffset)
-                    .onTapGesture { tapLocation in
-                        // Convert tap location from view space to image space
-                        let imagePoint = convertToImageCoordinates(
-                            tapLocation: tapLocation,
-                            viewSize: geometry.size,
-                            imageSize: image.size,
-                            scale: currentMagnification,
-                            offset: position + dragOffset
-                        )
+                    .contentShape(Rectangle())  // Ensure entire area is tappable
+                    .gesture(
+                        // Tap gesture using DragGesture(minimumDistance: 0) for correct coordinate space
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { value in
+                                // Check if this was a tap (no significant drag distance)
+                                let dragDistance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
 
-                        // Handle tap BEFORE gestures to ensure marker placement works
-                        if let callback = onTap {
-                            callback(imagePoint)
-                        } else if isPlacing, let type = activeType, !isLocked {
-                            landmarks[type] = imagePoint
-                        }
-                    }
+                                // Only process as tap if drag distance is very small (< 5 points)
+                                guard dragDistance < 5 else { return }
+
+                                // Use value.location which is in local coordinate space
+                                let tapLocation = value.location
+
+                                // Convert tap location from view space to image space
+                                let imagePoint = convertToImageCoordinates(
+                                    tapLocation: tapLocation,
+                                    viewSize: geometry.size,
+                                    imageSize: image.size,
+                                    scale: currentMagnification,
+                                    offset: position + dragOffset
+                                )
+
+                                // Handle tap
+                                if let callback = onTap {
+                                    callback(imagePoint)
+                                } else if isPlacing, let type = activeType, !isLocked {
+                                    landmarks[type] = imagePoint
+                                }
+                            }
+                    )
                     .gesture(
                         DragGesture()
                             .onChanged { value in
