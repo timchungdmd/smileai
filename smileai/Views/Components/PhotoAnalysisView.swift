@@ -84,6 +84,7 @@ struct PhotoAnalysisView: View {
                     )
                     .scaleEffect(currentMagnification)
                     .offset(position + dragOffset)
+                    .allowsHitTesting(false)  // Allow taps to pass through to image layer
                 }
 
                 // 3. Landmark Overlay Layer
@@ -199,9 +200,15 @@ struct PhotoAnalysisView: View {
             height: displayedImageSize.height * scale
         )
 
+        // SwiftUI's scaleEffect scales from center, which shifts the origin
+        let scaleShift = CGSize(
+            width: displayedImageSize.width * (1 - scale) / 2,
+            height: displayedImageSize.height * (1 - scale) / 2
+        )
+
         let scaledOrigin = CGPoint(
-            x: imageOrigin.x + offset.width,
-            y: imageOrigin.y + offset.height
+            x: imageOrigin.x + scaleShift.width + offset.width,
+            y: imageOrigin.y + scaleShift.height + offset.height
         )
 
         // Convert tap to image-relative coordinates
@@ -256,39 +263,17 @@ struct PhotoAnalysisView: View {
             height: displayedImageSize.height * scale
         )
 
+        // SwiftUI's scaleEffect scales from center, which shifts the origin
+        let scaleShift = CGSize(
+            width: displayedImageSize.width * (1 - scale) / 2,
+            height: displayedImageSize.height * (1 - scale) / 2
+        )
+
         // Convert to view coordinates
-        let viewX = imageOrigin.x + (relativeX * scaledSize.width) + offset.width
-        let viewY = imageOrigin.y + (relativeY * scaledSize.height) + offset.height
+        let viewX = imageOrigin.x + scaleShift.width + (relativeX * scaledSize.width) + offset.width
+        let viewY = imageOrigin.y + scaleShift.height + (relativeY * scaledSize.height) + offset.height
 
         return CGPoint(x: viewX, y: viewY)
-    }
-}
-
-// MARK: - Helper View
-struct LandmarkPointView: View {
-    let type: LandmarkType
-    let point: CGPoint
-    let zoom: CGFloat
-    let offset: CGSize
-    
-    var body: some View {
-        Circle()
-            // FIX: Use specific color
-            .fill(type.color)
-            .frame(width: 10, height: 10)
-            .position(
-                x: point.x * zoom + offset.width,
-                y: point.y * zoom + offset.height
-            )
-            .overlay(
-                Text(type.rawValue.prefix(2).uppercased())
-                    .font(.caption2)
-                    .foregroundColor(.white)
-                    .position(
-                        x: point.x * zoom + offset.width,
-                        y: point.y * zoom + offset.height - 15
-                    )
-            )
     }
 }
 
