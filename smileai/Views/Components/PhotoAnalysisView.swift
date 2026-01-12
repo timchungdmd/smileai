@@ -35,12 +35,21 @@ struct PhotoAnalysisView: View {
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(currentMagnification)
                     .offset(position + dragOffset)
-                    .onTapGesture { location in
+                    .onTapGesture { tapLocation in
+                        // Convert tap location from view space to image space
+                        let imagePoint = convertToImageCoordinates(
+                            tapLocation: tapLocation,
+                            viewSize: geometry.size,
+                            imageSize: image.size,
+                            scale: currentMagnification,
+                            offset: position + dragOffset
+                        )
+
                         // Handle tap BEFORE gestures to ensure marker placement works
                         if let callback = onTap {
-                            callback(location)
+                            callback(imagePoint)
                         } else if isPlacing, let type = activeType, !isLocked {
-                            landmarks[type] = location
+                            landmarks[type] = imagePoint
                         }
                     }
                     .gesture(
@@ -79,13 +88,26 @@ struct PhotoAnalysisView: View {
 
                 // 3. Landmark Overlay Layer
                 ForEach(landmarks.keys.sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { type in
-                    if let point = landmarks[type] {
-                        LandmarkPointView(
-                            type: type,
-                            point: point,
-                            zoom: currentMagnification,
-                            offset: position
+                    if let imagePoint = landmarks[type] {
+                        // Convert from image coordinates back to view coordinates for display
+                        let viewPoint = convertToViewCoordinates(
+                            imagePoint: imagePoint,
+                            viewSize: geometry.size,
+                            imageSize: image.size,
+                            scale: currentMagnification,
+                            offset: position + dragOffset
                         )
+
+                        Circle()
+                            .fill(type.color)
+                            .frame(width: 12, height: 12)
+                            .position(viewPoint)
+                            .overlay(
+                                Text(type.rawValue.prefix(2).uppercased())
+                                    .font(.caption2)
+                                    .foregroundColor(.white)
+                                    .position(CGPoint(x: viewPoint.x, y: viewPoint.y - 15))
+                            )
                     }
                 }
 
@@ -136,6 +158,109 @@ struct PhotoAnalysisView: View {
         }
 
         return facialLandmarks
+    }
+
+    /// Convert tap location from view coordinates to image coordinates
+    private func convertToImageCoordinates(
+        tapLocation: CGPoint,
+        viewSize: CGSize,
+        imageSize: CGSize,
+        scale: CGFloat,
+        offset: CGSize
+    ) -> CGPoint {
+        // Calculate aspect-fit frame for the image
+        let imageAspect = imageSize.width / imageSize.height
+        let viewAspect = viewSize.width / viewSize.height
+
+        var displayedImageSize: CGSize
+        if imageAspect > viewAspect {
+            // Image is wider - fit to width
+            displayedImageSize = CGSize(
+                width: viewSize.width,
+                height: viewSize.width / imageAspect
+            )
+        } else {
+            // Image is taller - fit to height
+            displayedImageSize = CGSize(
+                width: viewSize.height * imageAspect,
+                height: viewSize.height
+            )
+        }
+
+        // Calculate the image's position in the view (centered)
+        let imageOrigin = CGPoint(
+            x: (viewSize.width - displayedImageSize.width) / 2,
+            y: (viewSize.height - displayedImageSize.height) / 2
+        )
+
+        // Account for scale and offset
+        let scaledSize = CGSize(
+            width: displayedImageSize.width * scale,
+            height: displayedImageSize.height * scale
+        )
+
+        let scaledOrigin = CGPoint(
+            x: imageOrigin.x + offset.width,
+            y: imageOrigin.y + offset.height
+        )
+
+        // Convert tap to image-relative coordinates
+        let relativeX = (tapLocation.x - scaledOrigin.x) / scaledSize.width
+        let relativeY = (tapLocation.y - scaledOrigin.y) / scaledSize.height
+
+        // Convert to actual image pixel coordinates
+        let imageX = relativeX * imageSize.width
+        let imageY = relativeY * imageSize.height
+
+        return CGPoint(x: imageX, y: imageY)
+    }
+
+    /// Convert image coordinates back to view coordinates for display
+    private func convertToViewCoordinates(
+        imagePoint: CGPoint,
+        viewSize: CGSize,
+        imageSize: CGSize,
+        scale: CGFloat,
+        offset: CGSize
+    ) -> CGPoint {
+        // Calculate aspect-fit frame for the image
+        let imageAspect = imageSize.width / imageSize.height
+        let viewAspect = viewSize.width / viewSize.height
+
+        var displayedImageSize: CGSize
+        if imageAspect > viewAspect {
+            displayedImageSize = CGSize(
+                width: viewSize.width,
+                height: viewSize.width / imageAspect
+            )
+        } else {
+            displayedImageSize = CGSize(
+                width: viewSize.height * imageAspect,
+                height: viewSize.height
+            )
+        }
+
+        // Calculate the image's position in the view (centered)
+        let imageOrigin = CGPoint(
+            x: (viewSize.width - displayedImageSize.width) / 2,
+            y: (viewSize.height - displayedImageSize.height) / 2
+        )
+
+        // Convert from image pixel coordinates to relative coordinates
+        let relativeX = imagePoint.x / imageSize.width
+        let relativeY = imagePoint.y / imageSize.height
+
+        // Account for scale
+        let scaledSize = CGSize(
+            width: displayedImageSize.width * scale,
+            height: displayedImageSize.height * scale
+        )
+
+        // Convert to view coordinates
+        let viewX = imageOrigin.x + (relativeX * scaledSize.width) + offset.width
+        let viewY = imageOrigin.y + (relativeY * scaledSize.height) + offset.height
+
+        return CGPoint(x: viewX, y: viewY)
     }
 }
 
