@@ -54,7 +54,7 @@ class VirtualArticulator {
         duration: TimeInterval = 2.0,
         completion: ((CollisionReport) -> Void)? = nil
     ) {
-        guard let lowerArch = lowerArchNode else { return }
+        guard lowerArchNode != nil else { return }
 
         let path = generateMovementPath(type: type)
         movementPath = path
@@ -97,24 +97,22 @@ class VirtualArticulator {
             // Forward movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let translation = SCNVector3(
-                    x: Float(t * Double(settings.protrusiveGuidance)),
-                    y: Float(-t * Double(settings.condylarAngle) * 0.1),
-                    z: 0
-                )
-                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3.zero))
+                let xVal = Float(t * Double(settings.protrusiveGuidance))
+                let yVal = Float(-t * Double(settings.condylarAngle) * 0.1)
+                let translation = SCNVector3(x: xVal, y: yVal, z: 0)
+                let rotation = SCNVector3(x: 0, y: 0, z: 0)
+                path.append(ArticulatorPosition(translation: translation, rotation: rotation))
             }
 
         case .retrusion:
             // Backward movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let translation = SCNVector3(
-                    x: Float(-t * 3.0),
-                    y: Float(-t * Double(settings.condylarAngle) * 0.1),
-                    z: 0
-                )
-                path.append(ArticulatorPosition(translation: translation, rotation: SCNVector3.zero))
+                let xVal = Float(-t * 3.0)
+                let yVal = Float(-t * Double(settings.condylarAngle) * 0.1)
+                let translation = SCNVector3(x: xVal, y: yVal, z: 0)
+                let rotation = SCNVector3(x: 0, y: 0, z: 0)
+                path.append(ArticulatorPosition(translation: translation, rotation: rotation))
             }
 
         case .lateralRight:
@@ -162,8 +160,9 @@ class VirtualArticulator {
             let openPath = generateMovementPath(type: .opening)
             path = openPath.reversed()
 
-        case .custom(let positions):
-            path = positions
+        case .custom:
+            // Custom movement would be set externally
+            break
         }
 
         return path
@@ -251,10 +250,10 @@ class VirtualArticulator {
         let lowerBBox = lower.boundingBox
 
         // Convert to world coordinates
-        let upperMin = upper.convertPosition(SCNVector3(upperBBox.min), to: nil)
-        let upperMax = upper.convertPosition(SCNVector3(upperBBox.max), to: nil)
-        let lowerMin = lower.convertPosition(SCNVector3(lowerBBox.min), to: nil)
-        let lowerMax = lower.convertPosition(SCNVector3(lowerBBox.max), to: nil)
+        let upperMin = upper.convertPosition(SCNVector3(upperBBox.min.x, upperBBox.min.y, upperBBox.min.z), to: nil)
+        let upperMax = upper.convertPosition(SCNVector3(upperBBox.max.x, upperBBox.max.y, upperBBox.max.z), to: nil)
+        let lowerMin = lower.convertPosition(SCNVector3(lowerBBox.min.x, lowerBBox.min.y, lowerBBox.min.z), to: nil)
+        let lowerMax = lower.convertPosition(SCNVector3(lowerBBox.max.x, lowerBBox.max.y, lowerBBox.max.z), to: nil)
 
         // Check for bounding box overlap
         if !boxesIntersect(min1: upperMin, max1: upperMax, min2: lowerMin, max2: lowerMax) {
@@ -305,7 +304,7 @@ class VirtualArticulator {
             )
 
             if let hit = hitResults.first {
-                let distance = (hit.worldCoordinates - worldPoint).length()
+                let distance = (hit.worldCoordinates - worldPoint).length
                 maxPenetration = max(maxPenetration, CGFloat(distance))
             }
         }
@@ -318,8 +317,8 @@ class VirtualArticulator {
         var points: [SCNVector3] = []
 
         let bbox = node.boundingBox
-        let min = SCNVector3(bbox.min)
-        let max = SCNVector3(bbox.max)
+        let min = SCNVector3(bbox.min.x, bbox.min.y, bbox.min.z)
+        let max = SCNVector3(bbox.max.x, bbox.max.y, bbox.max.z)
 
         for _ in 0..<count {
             let x = Float.random(in: min.x...max.x)
