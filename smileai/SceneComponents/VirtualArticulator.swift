@@ -97,8 +97,8 @@ class VirtualArticulator {
             // Forward movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let xVal = Float(t * Double(settings.protrusiveGuidance))
-                let yVal = Float(-t * Double(settings.condylarAngle) * 0.1)
+                let xVal = CGFloat(t * Double(settings.protrusiveGuidance))
+                let yVal = CGFloat(-t * Double(settings.condylarAngle) * 0.1)
                 let translation = SCNVector3(x: xVal, y: yVal, z: 0)
                 let rotation = SCNVector3(x: 0, y: 0, z: 0)
                 path.append(ArticulatorPosition(translation: translation, rotation: rotation))
@@ -108,8 +108,8 @@ class VirtualArticulator {
             // Backward movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let xVal = Float(-t * 3.0)
-                let yVal = Float(-t * Double(settings.condylarAngle) * 0.1)
+                let xVal = CGFloat(-t * 3.0)
+                let yVal = CGFloat(-t * Double(settings.condylarAngle) * 0.1)
                 let translation = SCNVector3(x: xVal, y: yVal, z: 0)
                 let rotation = SCNVector3(x: 0, y: 0, z: 0)
                 path.append(ArticulatorPosition(translation: translation, rotation: rotation))
@@ -119,12 +119,11 @@ class VirtualArticulator {
             // Right lateral movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let translation = SCNVector3(
-                    x: Float(t * Double(settings.bennettAngle) * 0.5),
-                    y: 0,
-                    z: Float(t * 5.0)
-                )
-                let rotation = SCNVector3(0, Float(-t * 0.2), 0)
+                let xVal = CGFloat(t * Double(settings.bennettAngle) * 0.5)
+                let zVal = CGFloat(t * 5.0)
+                let translation = SCNVector3(x: xVal, y: 0, z: zVal)
+                let rotVal = CGFloat(-t * 0.2)
+                let rotation = SCNVector3(0, rotVal, 0)
                 path.append(ArticulatorPosition(translation: translation, rotation: rotation))
             }
 
@@ -132,12 +131,11 @@ class VirtualArticulator {
             // Left lateral movement
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
-                let translation = SCNVector3(
-                    x: Float(-t * Double(settings.bennettAngle) * 0.5),
-                    y: 0,
-                    z: Float(t * 5.0)
-                )
-                let rotation = SCNVector3(0, Float(t * 0.2), 0)
+                let xVal = CGFloat(-t * Double(settings.bennettAngle) * 0.5)
+                let zVal = CGFloat(t * 5.0)
+                let translation = SCNVector3(x: xVal, y: 0, z: zVal)
+                let rotVal = CGFloat(t * 0.2)
+                let rotation = SCNVector3(0, rotVal, 0)
                 path.append(ArticulatorPosition(translation: translation, rotation: rotation))
             }
 
@@ -146,12 +144,11 @@ class VirtualArticulator {
             for i in 0...steps {
                 let t = Double(i) / Double(steps)
                 let maxOpening = 40.0 // mm
-                let translation = SCNVector3(
-                    x: Float(t * 2.0), // Slight forward movement
-                    y: Float(-t * maxOpening),
-                    z: 0
-                )
-                let rotation = SCNVector3(Float(-t * 0.5), 0, 0) // Rotation around TMJ
+                let xVal = CGFloat(t * 2.0) // Slight forward movement
+                let yVal = CGFloat(-t * maxOpening)
+                let translation = SCNVector3(x: xVal, y: yVal, z: 0)
+                let rotVal = CGFloat(-t * 0.5)
+                let rotation = SCNVector3(rotVal, 0, 0) // Rotation around TMJ
                 path.append(ArticulatorPosition(translation: translation, rotation: rotation))
             }
 
@@ -239,9 +236,9 @@ class VirtualArticulator {
         position: ArticulatorPosition
     ) -> ToothCollision? {
 
-        // Get geometries
-        guard let upperGeometry = upper.geometry,
-              let lowerGeometry = lower.geometry else {
+        // Check that nodes have geometries
+        guard upper.geometry != nil,
+              lower.geometry != nil else {
             return nil
         }
 
@@ -321,9 +318,9 @@ class VirtualArticulator {
         let max = SCNVector3(bbox.max.x, bbox.max.y, bbox.max.z)
 
         for _ in 0..<count {
-            let x = Float.random(in: min.x...max.x)
+            let x = CGFloat.random(in: min.x...max.x)
             let y = max.y // Sample from top surface
-            let z = Float.random(in: min.z...max.z)
+            let z = CGFloat.random(in: min.z...max.z)
 
             points.append(SCNVector3(x, y, z))
         }
