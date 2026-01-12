@@ -23,7 +23,7 @@ class AISmileSimulationService {
         originalPhoto: NSImage,
         toothDesign: [ToothDesignData],
         landmarks: FacialLandmarks,
-        settings: SimulationSettings = .default
+        settings: SimulationSettings = SimulationSettings.default
     ) async throws -> SmileSimulationResult {
 
         guard let cgImage = originalPhoto.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
@@ -180,7 +180,7 @@ class AISmileSimulationService {
     }
 
     /// Create tooth path based on type
-    private static func createToothPath(for rect: CGRect, type: ToothType) -> CGPath {
+    private static func createToothPath(for rect: CGRect, type: SimulationToothType) -> CGPath {
         let path = CGMutablePath()
 
         // Create anatomically correct tooth outline
@@ -287,7 +287,7 @@ class AISmileSimulationService {
         let lightDirection = estimateLightDirection(from: landmarks)
 
         // Apply directional lighting filter
-        guard let ciImage = CIImage(cgImage: image) else { return image }
+        let ciImage = CIImage(cgImage: image)
 
         let lightFilter = CIFilter(name: "CISpotLight")
         lightFilter?.setValue(ciImage, forKey: kCIInputImageKey)
@@ -307,8 +307,7 @@ class AISmileSimulationService {
     /// Estimate light direction from facial landmarks
     private static func estimateLightDirection(from landmarks: FacialLandmarks) -> CGPoint {
         guard let leftPupil = landmarks.leftPupil,
-              let rightPupil = landmarks.rightPupil,
-              let noseTip = landmarks.noseTip else {
+              let rightPupil = landmarks.rightPupil else {
             return CGPoint(x: 0.5, y: 0.5)
         }
 
@@ -360,7 +359,7 @@ class AISmileSimulationService {
         settings: SimulationSettings
     ) -> CGImage {
 
-        guard let ciImage = CIImage(cgImage: image) else { return image }
+        let ciImage = CIImage(cgImage: image)
         var processedImage = ciImage
 
         // Apply color adjustment
@@ -551,9 +550,17 @@ class AISmileSimulationService {
 
 struct ToothDesignData {
     var boundingRect: CGRect
-    var type: ToothType
+    var type: SimulationToothType
     var shade: ToothShade
     var morphology: ToothMorphology
+}
+
+enum SimulationToothType: String {
+    case centralIncisor = "Central Incisor"
+    case lateralIncisor = "Lateral Incisor"
+    case canine = "Canine"
+    case premolar = "Premolar"
+    case molar = "Molar"
 }
 
 enum ToothShade: String, CaseIterable {
