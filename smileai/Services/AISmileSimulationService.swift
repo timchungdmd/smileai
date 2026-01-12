@@ -24,8 +24,10 @@ class AISmileSimulationService {
         originalPhoto: NSImage,
         toothDesign: [ToothDesignData],
         landmarks: FacialLandmarks,
-        settings: SimulationSettings = SimulationSettings.default
+        settings: SimulationSettings? = nil
     ) async throws -> SmileSimulationResult {
+
+        let settings = settings ?? SimulationSettings.default
 
         guard let cgImage = originalPhoto.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             throw SimulationError.invalidImage
